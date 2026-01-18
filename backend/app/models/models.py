@@ -105,6 +105,29 @@ class Appointment(AppointmentBase, table=True):
     )
     interview: Optional["Interview"] = Relationship(back_populates="appointment")
     consent: Optional["Consent"] = Relationship(back_populates="appointment")
+    notifications: List["Notification"] = Relationship(back_populates="appointment")
+
+
+class NotificationType(str, Enum):
+    APPOINTMENT_REMINDER = "appointment_reminder"
+    APPOINTMENT_CONFIRMATION = "appointment_confirmation"
+    TEST_RESULT = "test_result"
+
+
+class Notification(SQLModel, table=True):
+    __tablename__ = "notifications"
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    user_id: str = Field(foreign_key="users.id")
+    appointment_id: Optional[str] = Field(default=None, foreign_key="appointments.id")
+    type: NotificationType
+    message: str
+    sent_at: datetime = Field(default_factory=datetime.utcnow)
+    read: bool = Field(default=False)
+
+    # Relationships
+    user: Optional[User] = Relationship()
+    appointment: Optional[Appointment] = Relationship(back_populates="notifications")
 
 
 class AppointmentCreate(AppointmentBase):
@@ -277,6 +300,8 @@ class AuditLogRead(SQLModel):
 class Token(SQLModel):
     access_token: str
     token_type: str = "bearer"
+    user_id: str
+    role: str
 
 
 class TokenData(SQLModel):

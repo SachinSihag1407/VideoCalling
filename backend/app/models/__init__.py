@@ -4,7 +4,8 @@ from app.models.models import (
     Consent, ConsentCreate, ConsentRead, ConsentUpdate, ConsentStatus,
     Interview, InterviewCreate, InterviewRead, InterviewUpdate,
     AuditLog, AuditLogCreate, AuditLogRead, AuditAction,
-    Token, TokenData
+    Token, TokenData,
+    Notification, NotificationType
 )
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "Consent", "ConsentCreate", "ConsentRead", "ConsentUpdate", "ConsentStatus",
     "Interview", "InterviewCreate", "InterviewRead", "InterviewUpdate",
     "AuditLog", "AuditLogCreate", "AuditLogRead", "AuditAction",
-    "Token", "TokenData"
+    "Token", "TokenData",
+    "Notification", "NotificationType"
 ]

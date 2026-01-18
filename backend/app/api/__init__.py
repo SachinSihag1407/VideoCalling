@@ -6,6 +6,7 @@ from app.api.interviews import router as interviews_router
 from app.api.audit import router as audit_router
 from app.api.signaling import router as signaling_router
 from app.api.storage import router as storage_router
+from app.api.notifications import router as notifications_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -16,5 +17,6 @@ api_router.include_router(interviews_router)
 api_router.include_router(audit_router)
 api_router.include_router(signaling_router)
 api_router.include_router(storage_router)
+api_router.include_router(notifications_router)
 
 __all__ = ["api_router"]
