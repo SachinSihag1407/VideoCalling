@@ -56,7 +56,9 @@ class ConnectionManager:
     
     async def broadcast_to_room(self, room_id: str, message: dict, exclude: WebSocket = None):
         if room_id in self.rooms:
-            for connection in self.rooms[room_id]:
+            # Create a copy to avoid 'Set changed size during iteration' error
+            connections = list(self.rooms[room_id])
+            for connection in connections:
                 if connection != exclude:
                     try:
                         await connection.send_json(message)
@@ -65,7 +67,9 @@ class ConnectionManager:
     
     async def send_to_user(self, room_id: str, target_user_id: str, message: dict):
         if room_id in self.rooms:
-            for connection in self.rooms[room_id]:
+            # Create a copy to avoid 'Set changed size during iteration' error
+            connections = list(self.rooms[room_id])
+            for connection in connections:
                 if connection in self.connections:
                     if self.connections[connection]["user_id"] == target_user_id:
                         try:
@@ -77,7 +81,9 @@ class ConnectionManager:
     def get_room_participants(self, room_id: str) -> list:
         participants = []
         if room_id in self.rooms:
-            for connection in self.rooms[room_id]:
+            # Create a copy to avoid 'Set changed size during iteration' error
+            connections = list(self.rooms[room_id])
+            for connection in connections:
                 if connection in self.connections:
                     participants.append(self.connections[connection])
         return participants

@@ -80,7 +80,12 @@ async def login(
     client_ip = request.client.host if request.client else None
     await audit_service.log_login(user.id, client_ip)
     
-    return Token(access_token=access_token, token_type="bearer")
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "user_id": user.id,
+        "role": user.role
+    }
 
 
 @router.post("/login/json", response_model=Token)
@@ -116,7 +121,12 @@ async def login_json(
     client_ip = request.client.host if request.client else None
     await audit_service.log_login(user.id, client_ip)
     
-    return Token(access_token=access_token, token_type="bearer")
+    return Token(
+        access_token=access_token, 
+        token_type="bearer",
+        user_id=user.id,
+        role=user.role
+    )
 
 
 @router.get("/me", response_model=UserRead)

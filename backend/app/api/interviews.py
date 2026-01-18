@@ -404,6 +404,24 @@ async def add_transcript_chunk(
     current_user: User = Depends(get_current_user)
 ):
     """Add a chunk of transcribed text in real-time."""
+    # Verify appointment exists and user has access
+    result = await session.execute(
+        select(Appointment).where(Appointment.id == appointment_id)
+    )
+    appointment = result.scalar_one_or_none()
+    
+    if not appointment:
+        raise HTTPException(
+             status_code=status.HTTP_404_NOT_FOUND,
+             detail="Appointment not found"
+        )
+
+    if current_user.id not in [appointment.doctor_id, appointment.patient_id]:
+         raise HTTPException(
+             status_code=status.HTTP_403_FORBIDDEN,
+             detail="Access denied"
+         )
+
     transcription_service = get_transcription_service()
     
     # Determine speaker based on role

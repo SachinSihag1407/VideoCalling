@@ -12,6 +12,7 @@ from app.models import (
     AuditAction
 )
 from app.services import get_audit_service
+from app.services.notification import NotificationService
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
 
@@ -54,6 +55,14 @@ async def create_appointment(
     await session.commit()
     await session.refresh(appointment)
     
+    # Send Notification
+    try:
+        notif_service = NotificationService(session)
+        await notif_service.notify_appointment_confirmation(appointment, current_user, doctor)
+    except Exception as e:
+        # Don't fail the appointment creation if notification fails
+        print(f"Failed to send notifications: {e}")
+
     # Log the creation
     audit_service = get_audit_service(session)
     client_ip = request.client.host if request.client else None
