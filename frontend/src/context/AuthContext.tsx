@@ -23,8 +23,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const storedUser = localStorage.getItem('user');
     
     if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        setToken(storedToken);
+        setUser(parsedUser);
+      } catch (error) {
+        // Clear invalid session data
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setToken(null);
+        setUser(null);
+      }
     }
     setIsLoading(false);
   }, []);
@@ -36,11 +45,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.setItem('token', access_token);
     setToken(access_token);
     
-    const userResponse = await authAPI.getCurrentUser();
-    const userData = userResponse.data;
-    
-    localStorage.setItem('user', JSON.stringify(userData));
-    setUser(userData);
+    try {
+      const userResponse = await authAPI.getCurrentUser();
+      const userData = userResponse.data;
+      
+      localStorage.setItem('user', JSON.stringify(userData));
+      setUser(userData);
+    } catch (error) {
+      // Rollback if getting user fails
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      setToken(null);
+      setUser(null);
+      throw error;
+    }
   };
 
   const register = async (email: string, password: string, fullName: string, role: string) => {

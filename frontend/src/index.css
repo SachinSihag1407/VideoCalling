@@ -3,58 +3,91 @@
 @tailwind utilities;
 
 @layer utilities {
-  .animate-in {
-    animation-duration: 0.5s;
-    animation-fill-mode: both;
-    animation-timing-function: ease-out;
-  }
-  
-  .fade-in {
-    animation-name: fadeIn;
-  }
-  
-  .slide-in-from-bottom-4 {
-    animation-name: slideInBottom4;
-  }
-  .slide-in-from-bottom-5 {
-    animation-name: slideInBottom5;
-  }
-  .slide-in-from-bottom-6 {
-    animation-name: slideInBottom6;
-  }
-  .slide-in-from-bottom-7 {
-    animation-name: slideInBottom7;
-  }
-  
-  .slide-in-from-right-8 {
-    animation-name: slideInRight8;
-  }
-  
-  .zoom-in-95 {
-    animation-name: zoomIn95;
+  @media (prefers-reduced-motion: no-preference) {
+    .animate-in {
+      animation-duration: 0.5s;
+      animation-fill-mode: both;
+      animation-timing-function: ease-out;
+    }
+    
+    .fade-in {
+      animation-name: fadeIn;
+    }
+    
+    .slide-in-from-bottom-4 {
+      animation-name: slideInBottom4;
+    }
+    .slide-in-from-bottom-5 {
+      animation-name: slideInBottom5;
+    }
+    .slide-in-from-bottom-6 {
+      animation-name: slideInBottom6;
+    }
+    .slide-in-from-bottom-7 {
+      animation-name: slideInBottom7;
+    }
+    
+    .slide-in-from-right-8 {
+      animation-name: slideInRight8;
+    }
+    
+    .zoom-in-95 {
+      animation-name: zoomIn95;
+    }
+
+    .delay-75 {
+      animation-delay: 75ms;
+    }
+    .delay-100 {
+      animation-delay: 100ms;
+    }
+    .delay-150 {
+      animation-delay: 150ms;
+    }
+    .delay-200 {
+      animation-delay: 200ms;
+    }
+    
+    .animate-bounce-slow {
+      animation: bounce 3s infinite;
+    }
   }
 
-  .delay-75 {
-    animation-delay: 75ms;
-  }
-  .delay-100 {
-    animation-delay: 100ms;
-  }
-  .delay-150 {
-    animation-delay: 150ms;
-  }
-  .delay-200 {
-    animation-delay: 200ms;
-  }
-  
-  .animate-bounce-slow {
-    animation: bounce 3s infinite;
+  @media (prefers-reduced-motion: reduce) {
+    .animate-in,
+    .fade-in,
+    .slide-in-from-bottom-4,
+    .slide-in-from-bottom-5,
+    .slide-in-from-bottom-6,
+    .slide-in-from-bottom-7,
+    .slide-in-from-right-8,
+    .zoom-in-95,
+    .delay-75,
+    .delay-100,
+    .delay-150,
+    .delay-200,
+    .animate-bounce-slow {
+      animation: none !important;
+      animation-duration: 0s !important;
+      transition-duration: 0s !important;
+    }
   }
 }
 
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(-25%);
+    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
+  }
+  50% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+  }
 }
 
 @keyframes slideInBottom4 {

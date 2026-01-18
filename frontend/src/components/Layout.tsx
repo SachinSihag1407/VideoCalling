@@ -10,6 +10,7 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { user, logout } = useAuth();
   const [showUserMenu, setShowUserMenu] = React.useState(false);
+  const [notificationsCount, setNotificationsCount] = React.useState(2);
 
   if (!user) {
     return <Navigate to="/login" replace />;
@@ -34,9 +35,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             {/* Right Side */}
             <div className="flex items-center space-x-4">
               {/* Notifications */}
-              <button className="relative p-2.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition">
+              <button 
+                className="relative p-2.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition"
+                aria-label="Clear notifications"
+                onClick={() => setNotificationsCount(0)}
+              >
                 <Bell className="w-5 h-5" />
-                <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
+                {notificationsCount > 0 && (
+                  <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
+                )}
               </button>
 
               {/* User Menu */}
@@ -66,7 +73,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                       <p className="text-sm font-medium text-slate-800">{user.full_name}</p>
                       <p className="text-xs text-slate-500">{user.email}</p>
                     </div>
-                    <button className="w-full px-4 py-2 text-left text-sm text-slate-600 hover:bg-slate-50 flex items-center space-x-2">
+                    {/* TODO: Implement settings functionality */}
+                    <button 
+                      className="w-full px-4 py-2 text-left text-sm text-slate-400 hover:bg-slate-50 flex items-center space-x-2 cursor-not-allowed"
+                      aria-disabled="true"
+                      title="Settings not implemented yet"
+                      disabled
+                    >
                       <Settings className="w-4 h-4" />
                       <span>Settings</span>
                     </button>

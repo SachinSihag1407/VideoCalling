@@ -11,7 +11,7 @@ The modern, responsive web interface for the Video Consulting Platform, built wi
 ## 🛠️ Setup & Running
 
 ### 1. Prerequisites
-Ensure you have Node.js (v16+) installed. Navigate to the frontend directory:
+Ensure you have Node.js 20+ installed. Navigate to the frontend directory:
 
 ```bash
 cd frontend

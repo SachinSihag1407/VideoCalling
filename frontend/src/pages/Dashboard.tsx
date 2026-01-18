@@ -60,6 +60,12 @@ const Dashboard: React.FC = () => {
 
   const handleCreateAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (new Date(newAppointment.scheduled_time) < new Date()) {
+        alert("Cannot schedule appointments in the past");
+        return;
+    }
+
     try {
       await appointmentsAPI.create(newAppointment);
       setShowNewAppointment(false);
@@ -272,10 +278,10 @@ const Dashboard: React.FC = () => {
         {/* Stats Grid - Enhanced */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-bottom-6 delay-100">
           {[
-            { label: 'Total Appointments', value: appointments.length, icon: Calendar, color: 'blue', bg: 'bg-blue-50', text: 'text-blue-600' },
-            { label: 'Pending Requests', value: appointments.filter(a => a.status === 'pending').length, icon: Clock, color: 'amber', bg: 'bg-amber-50', text: 'text-amber-600' },
-            { label: 'Confirmed', value: appointments.filter(a => a.status === 'confirmed').length, icon: CheckCircle, color: 'emerald', bg: 'bg-emerald-50', text: 'text-emerald-600' },
-            { label: 'Completed', value: appointments.filter(a => a.status === 'completed').length, icon: FileText, color: 'purple', bg: 'bg-purple-50', text: 'text-purple-600' },
+            { label: 'Total Appointments', value: appointments.length, icon: Calendar, ring: 'ring-blue-100', bg: 'bg-blue-50', text: 'text-blue-600' },
+            { label: 'Pending Requests', value: appointments.filter(a => a.status === 'pending').length, icon: Clock, ring: 'ring-amber-100', bg: 'bg-amber-50', text: 'text-amber-600' },
+            { label: 'Confirmed', value: appointments.filter(a => a.status === 'confirmed').length, icon: CheckCircle, ring: 'ring-emerald-100', bg: 'bg-emerald-50', text: 'text-emerald-600' },
+            { label: 'Completed', value: appointments.filter(a => a.status === 'completed').length, icon: FileText, ring: 'ring-purple-100', bg: 'bg-purple-50', text: 'text-purple-600' },
           ].map((stat, idx) => (
             <div key={idx} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow duration-200 group">
               <div className="flex items-center justify-between">
@@ -283,7 +289,7 @@ const Dashboard: React.FC = () => {
                   <p className="text-sm font-medium text-gray-500 mb-1">{stat.label}</p>
                   <p className="text-3xl font-bold text-gray-900 group-hover:scale-110 origin-left transition-transform duration-200">{stat.value}</p>
                 </div>
-                <div className={`p-3 rounded-xl ${stat.bg} ${stat.text} group-hover:ring-2 ring-offset-2 ring-${stat.color}-100 transition-all`}>
+                <div className={`p-3 rounded-xl ${stat.bg} ${stat.text} group-hover:ring-2 ring-offset-2 ${stat.ring} transition-all`}>
                   <stat.icon className="w-6 h-6" />
                 </div>
               </div>
@@ -552,6 +558,7 @@ const Dashboard: React.FC = () => {
                 <input
                   type="datetime-local"
                   value={newAppointment.scheduled_time}
+                  min={format(new Date(), "yyyy-MM-dd'T'HH:mm")}
                   onChange={(e) => setNewAppointment({ ...newAppointment, scheduled_time: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition"
                   required

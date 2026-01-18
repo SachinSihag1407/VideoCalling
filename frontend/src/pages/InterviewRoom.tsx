@@ -77,6 +77,48 @@ const InterviewRoom: React.FC = () => {
   const recognitionRef = useRef<any>(null);
   const transcriptIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isTranscribingRef = useRef(isTranscribing);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const appointmentRef = useRef<Appointment | null>(null);
+  const recognitionRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transcriptChunkQueueRef = useRef<{text: string, speaker: string}[]>([]);
+  const isProcessingChunkRef = useRef(false);
+
+  useEffect(() => {
+    isTranscribingRef.current = isTranscribing;
+  }, [isTranscribing]);
+
+  // Keep appointment ref in sync
+  useEffect(() => {
+    appointmentRef.current = appointment;
+  }, [appointment]);
+
+  // Sync local stream with video element
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      console.log('Setting local video srcObject');
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  // Sync remote stream with video element
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      console.log('Setting remote video srcObject');
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
+  // Force consent modal check on mount or when consent changes
+  useEffect(() => {
+    if (user?.role === 'patient') {
+      if (!consent || consent.status === 'pending') {
+        setShowConsentModal(true);
+      } else if (consent.status === 'granted') {
+        setShowConsentModal(false);
+      }
+    }
+  }, [consent, user]);
 
   useEffect(() => {
     loadAppointmentData();
@@ -113,7 +155,16 @@ const InterviewRoom: React.FC = () => {
         consentAPI.get(appointmentId).catch(() => null),
       ]);
 
-      setAppointment(appointmentRes.data);
+      const apptData = appointmentRes.data;
+      
+      // Set both state and ref immediately
+      setAppointment(apptData);
+      appointmentRef.current = apptData;
+      console.log('✅ Appointment loaded:', { 
+        id: apptData.id, 
+        doctor_id: apptData.doctor_id, 
+        patient_id: apptData.patient_id 
+      });
 
       if (consentRes?.data) {
         setConsent(consentRes.data);
@@ -126,9 +177,11 @@ const InterviewRoom: React.FC = () => {
         // No interview yet
       }
 
-      await initializeMedia(appointmentRes.data);
+      // Initialize media - now appointment is guaranteed to be set
+      await initializeMedia(apptData);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load appointment');
+      console.error('Load appointment error:', err);
+      setError(err.response?.data?.detail || err.message || 'Failed to load appointment');
     } finally {
       setIsLoading(false);
     }
@@ -136,81 +189,172 @@ const InterviewRoom: React.FC = () => {
 
   const initializeMedia = async (apptData?: Appointment) => {
     try {
+      console.log('Requesting media access...');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
+      console.log('Media access granted, tracks:', stream.getTracks().map(t => t.kind));
+      
+      // Store in both ref and state
+      localStreamRef.current = stream;
       setLocalStream(stream);
+      
+      // Set video element directly
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
+        console.log('Local video element set');
       }
-      setCallStatus('connected');
-      if (apptData) {
+      
+      setCallStatus('connecting');
+      
+      // Connect WebSocket after media is ready
+      if (apptData?.room_id) {
         connectWebSocket(apptData.room_id);
       } else if (appointment?.room_id) {
-         connectWebSocket(appointment.room_id);
+        connectWebSocket(appointment.room_id);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to get media devices:', err);
-      setError('Failed to access camera and microphone');
+      setError(`Failed to access camera and microphone: ${err.message}. Please check permissions.`);
+      throw err;
     }
   };
 
   const connectWebSocket = (roomId: string) => {
-    if (!appointmentId || !roomId) return;
+    if (!appointmentId || !roomId) {
+      console.error('Cannot connect WebSocket - missing appointmentId or roomId', { appointmentId, roomId });
+      return;
+    }
 
     const token = localStorage.getItem('token');
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/signaling/${roomId}?token=${token}`;
 
+    console.log('Connecting WebSocket...', { roomId, user: user?.id, role: user?.role });
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => console.log('WebSocket connected');
-    ws.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      handleSignalingMessage(data);
+    ws.onopen = () => {
+      console.log('✅ WebSocket connected successfully');
+      console.log('Sending ready message with user_id:', user?.id);
+      ws.send(JSON.stringify({ type: 'ready', user_id: user?.id }));
     };
-    ws.onerror = (err) => console.error('WebSocket error:', err);
-    ws.onclose = () => console.log('WebSocket closed');
+    
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('📨 Received signaling message:', data.type, data);
+        await handleSignalingMessage(data);
+      } catch (error) {
+         console.error('❌ Failed to handle signaling message:', error, event.data);
+      }
+    };
+    
+    ws.onerror = (err) => console.error('❌ WebSocket error:', err);
+    ws.onclose = () => console.log('🔌 WebSocket closed');
   };
 
   const handleSignalingMessage = async (data: any) => {
+    console.log('🔄 Handling signaling message:', data.type);
+    
     switch (data.type) {
-      case 'user-joined':
-        if (data.user_id !== user?.id) await createOffer();
+      case 'room-info':
+        console.log('🏠 Room info received:', {
+          participants: data.participants,
+          count: data.participants?.length,
+          shouldCreateOffer: data.participants && data.participants.length > 1
+        });
+        // Only DOCTOR creates offer when joining a room with others
+        if (data.participants && data.participants.length > 1 && user?.role === 'doctor') {
+          console.log('👥 Multiple users in room, doctor creating offer...');
+          await createOffer();
+        } else {
+          console.log('⏳ Waiting for other participant...');
+        }
         break;
+        
+      case 'user-joined':
+        console.log('👤 User joined:', data.user_id, 'My ID:', user?.id);
+        if (data.user_id !== user?.id) {
+          // Only DOCTOR creates offer when a new user joins
+          if (user?.role === 'doctor') {
+            console.log('🤝 New user joined, doctor creating offer...');
+            await createOffer();
+          } else {
+            console.log('⏳ Patient waiting for doctor\'s offer...');
+          }
+        } else {
+          console.log('ℹ️ Ignoring self-join message');
+        }
+        break;
+        
       case 'offer':
+        console.log('📩 Received offer from:', data.from_id);
         await handleOffer(data);
         break;
+        
       case 'answer':
+        console.log('✉️ Received answer from:', data.from_id);
         await handleAnswer(data);
         break;
+        
       case 'ice-candidate':
+        console.log('🧊 Received ICE candidate');
         await handleIceCandidate(data);
         break;
+        
       case 'consent-requested':
+        console.log('📋 Consent requested');
         if (user?.role === 'patient') setShowConsentModal(true);
         break;
+        
       case 'consent-response':
+        console.log('✅ Consent response:', data.granted);
         if (data.granted) await loadConsentStatus();
         break;
+        
       case 'recording-started':
+        console.log('🔴 Recording started');
         setIsRecording(true);
         break;
+        
       case 'recording-stopped':
+        console.log('⏹️ Recording stopped');
         setIsRecording(false);
         break;
+        
+      case 'user-left':
+        console.log('👋 User left:', data.user_id);
+        // Reset connection state when remote user leaves
+        if (data.user_id !== user?.id) {
+          setRemoteStream(null);
+          setCallStatus('connecting');
+          if (pcRef.current) {
+            pcRef.current.close();
+            pcRef.current = null;
+          }
+        }
+        break;
+        
+      default:
+        console.log('❓ Unknown message type:', data.type);
     }
   };
 
   const createPeerConnection = () => {
+    // Close existing connection if any
+    if (pcRef.current) {
+      pcRef.current.close();
+    }
+
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     });
 
     pc.onicecandidate = (event) => {
       if (event.candidate && wsRef.current) {
+        console.log('Sending ICE candidate');
         wsRef.current.send(JSON.stringify({
           type: 'ice-candidate',
           candidate: event.candidate,
@@ -220,16 +364,36 @@ const InterviewRoom: React.FC = () => {
     };
 
     pc.ontrack = (event) => {
-      setRemoteStream(event.streams[0]);
+      console.log('Received remote track:', event.track.kind, event.streams[0].id);
+      const remoteStream = event.streams[0];
+      setRemoteStream(remoteStream);
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+        remoteVideoRef.current.srcObject = remoteStream;
+        console.log('Remote video element set');
       }
     };
 
-    if (localStream) {
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
+    pc.onconnectionstatechange = () => {
+      console.log('Connection state:', pc.connectionState);
+      if (pc.connectionState === 'connected') {
+        console.log('Peer connection established!');
+        setCallStatus('connected');
+      } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        console.log('Connection lost, status:', pc.connectionState);
+        setCallStatus('connecting');
+      }
+    };
+
+    // Add local tracks using ref to avoid race conditions
+    const stream = localStreamRef.current;
+    if (stream) {
+      console.log('Adding local tracks to peer connection:', stream.getTracks().length);
+      stream.getTracks().forEach((track) => {
+        console.log('Adding track:', track.kind, track.enabled);
+        pc.addTrack(track, stream);
       });
+    } else {
+      console.warn('No local stream available when creating peer connection');
     }
 
     pcRef.current = pc;
@@ -237,48 +401,131 @@ const InterviewRoom: React.FC = () => {
   };
 
   const getRemoteUserId = () => {
-    if (!appointment || !user) return '';
-    return user.role === 'doctor' ? appointment.patient_id : appointment.doctor_id;
+    const appt = appointmentRef.current;
+    if (!appt || !user) {
+      console.warn('⚠️ Cannot get remote user ID - missing appointment or user', { appointment: appt, user });
+      return '';
+    }
+    if (!appt.patient_id || !appt.doctor_id) {
+      console.warn('⚠️ Appointment missing patient_id or doctor_id', { appointment: appt });
+      return '';
+    }
+    const remoteId = user.role === 'doctor' ? appt.patient_id : appt.doctor_id;
+    console.log('✅ Remote user ID:', remoteId, '(I am', user.role + ')');
+    return remoteId;
   };
 
   const createOffer = async () => {
-    const pc = createPeerConnection();
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    try {
+      console.log('🎯 Creating offer...');
+      const remoteUserId = getRemoteUserId();
+      
+      if (!remoteUserId) {
+        console.error('❌ Cannot create offer - no remote user ID available');
+        return;
+      }
+      
+      console.log('Current state:', {
+        hasLocalStream: !!localStreamRef.current,
+        localStreamTracks: localStreamRef.current?.getTracks().length,
+        hasExistingPC: !!pcRef.current,
+        remoteUserId
+      });
+      
+      const pc = createPeerConnection();
+      console.log('✅ Peer connection created');
+      
+      const offer = await pc.createOffer();
+      console.log('✅ Offer created:', offer.type);
+      
+      await pc.setLocalDescription(offer);
+      console.log('✅ Local description set');
 
-    if (wsRef.current) {
-      wsRef.current.send(JSON.stringify({
-        type: 'offer',
-        offer: offer,
-        target_id: getRemoteUserId(),
-      }));
+      if (wsRef.current) {
+        const message = {
+          type: 'offer',
+          offer: offer,
+          target_id: remoteUserId,
+        };
+        console.log('📤 Sending offer to:', message.target_id);
+        wsRef.current.send(JSON.stringify(message));
+      } else {
+        console.error('❌ WebSocket not available to send offer');
+      }
+    } catch (error) {
+      console.error('❌ Error creating offer:', error);
     }
   };
 
   const handleOffer = async (data: any) => {
-    const pc = createPeerConnection();
-    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    try {
+      console.log('🎯 Handling offer from:', data.from_id);
+      console.log('Offer details:', data.offer?.type);
+      console.log('Current state:', {
+        hasLocalStream: !!localStreamRef.current,
+        localStreamTracks: localStreamRef.current?.getTracks().length,
+        hasExistingPC: !!pcRef.current
+      });
+      
+      const pc = createPeerConnection();
+      console.log('✅ Peer connection created for answer');
+      
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      console.log('✅ Remote description set');
+      
+      const answer = await pc.createAnswer();
+      console.log('✅ Answer created:', answer.type);
+      
+      await pc.setLocalDescription(answer);
+      console.log('✅ Local description set with answer');
 
-    if (wsRef.current) {
-      wsRef.current.send(JSON.stringify({
-        type: 'answer',
-        answer: answer,
-        target_id: data.from_id,
-      }));
+      if (wsRef.current) {
+        const message = {
+          type: 'answer',
+          answer: answer,
+          target_id: data.from_id,
+        };
+        console.log('📤 Sending answer to:', message.target_id);
+        wsRef.current.send(JSON.stringify(message));
+      } else {
+        console.error('❌ WebSocket not available to send answer');
+      }
+    } catch (error) {
+      console.error('❌ Error handling offer:', error);
     }
   };
 
   const handleAnswer = async (data: any) => {
-    if (pcRef.current) {
-      await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+    try {
+      console.log('🎯 Handling answer from:', data.from_id);
+      console.log('Answer details:', data.answer?.type);
+      
+      if (pcRef.current) {
+        console.log('Current PC state:', pcRef.current.signalingState);
+        await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+        console.log('✅ Remote description set with answer');
+        console.log('New PC state:', pcRef.current.signalingState);
+      } else {
+        console.error('❌ No peer connection exists to handle answer');
+      }
+    } catch (error) {
+      console.error('❌ Error handling answer:', error);
     }
   };
 
   const handleIceCandidate = async (data: any) => {
-    if (pcRef.current && data.candidate) {
-      await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+    try {
+      console.log('🧊 Handling ICE candidate');
+      if (pcRef.current && data.candidate) {
+        console.log('Adding ICE candidate to peer connection');
+        await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+        console.log('✅ ICE candidate added');
+      } else {
+        if (!pcRef.current) console.error('❌ No peer connection to add ICE candidate');
+        if (!data.candidate) console.error('❌ No candidate data received');
+      }
+    } catch (error) {
+      console.error('❌ Error handling ICE candidate:', error);
     }
   };
 
@@ -293,8 +540,9 @@ const InterviewRoom: React.FC = () => {
   };
 
   const toggleVideo = () => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach((track) => {
+    const stream = localStreamRef.current;
+    if (stream) {
+      stream.getVideoTracks().forEach((track) => {
         track.enabled = !track.enabled;
       });
       setIsVideoOn(!isVideoOn);
@@ -302,8 +550,9 @@ const InterviewRoom: React.FC = () => {
   };
 
   const toggleAudio = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach((track) => {
+    const stream = localStreamRef.current;
+    if (stream) {
+      stream.getAudioTracks().forEach((track) => {
         track.enabled = !track.enabled;
       });
       setIsAudioOn(!isAudioOn);
@@ -330,6 +579,11 @@ const InterviewRoom: React.FC = () => {
     if (!appointmentId) return;
 
     try {
+      // Ensure consent record exists first
+      if (!consent) {
+        await consentAPI.create(appointmentId);
+      }
+      
       await consentAPI.update(appointmentId, granted ? 'granted' : 'denied');
       await loadConsentStatus();
       setShowConsentModal(false);
@@ -387,10 +641,18 @@ const InterviewRoom: React.FC = () => {
     if (!appointmentId || !mediaRecorderRef.current) return;
 
     try {
+      const stopPromise = new Promise<void>((resolve) => {
+         if (mediaRecorderRef.current) {
+            mediaRecorderRef.current.onstop = () => resolve();
+         } else {
+            resolve();
+         }
+      });
+      
       mediaRecorderRef.current.stop();
+      await stopPromise;
+      
       setIsRecording(false);
-
-      await new Promise((resolve) => setTimeout(resolve, 500));
 
       const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
       const file = new File([blob], 'interview.webm', { type: 'video/webm' });
@@ -420,119 +682,278 @@ const InterviewRoom: React.FC = () => {
       setIsTranscribing(true);
 
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = 'en-US';
-
-        recognition.onresult = async (event: any) => {
-          let finalTranscript = '';
-          let interimTranscript = '';
-
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              finalTranscript = transcript;
-              try {
-                const speaker = user?.role === 'doctor' ? 'Doctor' : 'Patient';
-                await interviewsAPI.addRealtimeChunk(appointmentId, transcript, speaker);
-                setRealtimeTranscript(prev => {
-                  const newLine = `[${speaker}]: ${transcript}`;
-                  return prev ? `${prev}\n${newLine}` : newLine;
-                });
-              } catch (err) {
-                console.error('Failed to send transcript chunk:', err);
-              }
-            } else {
-              interimTranscript += transcript;
-            }
-          }
-
-          const captionText = finalTranscript || interimTranscript;
-          if (captionText) {
-            setCurrentCaption(captionText);
-            setTimeout(() => {
-              setCurrentCaption(prev => prev === captionText ? '' : prev);
-            }, 3000);
-          }
-        };
-
-        recognition.onerror = (event: any) => {
-          console.error('Speech recognition error:', event.error);
-          if (event.error !== 'no-speech') {
-            setTimeout(() => {
-              if (isTranscribing && recognitionRef.current) {
-                try {
-                  recognitionRef.current.start();
-                } catch (e) {}
-              }
-            }, 1000);
-          }
-        };
-
-        recognition.onend = () => {
-          if (isTranscribing && recognitionRef.current) {
-            try {
-              recognitionRef.current.start();
-            } catch (e) {}
-          }
-        };
-
-        recognitionRef.current = recognition;
-        recognition.start();
+      if (!SpeechRecognition) {
+        console.error('Speech recognition not supported in this browser');
+        setError('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
+        return;
       }
 
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      recognition.maxAlternatives = 1;
+
+      // Process queued transcript chunks
+      const processTranscriptQueue = async () => {
+        if (isProcessingChunkRef.current || transcriptChunkQueueRef.current.length === 0) {
+          return;
+        }
+
+        isProcessingChunkRef.current = true;
+        const chunk = transcriptChunkQueueRef.current.shift();
+
+        if (chunk) {
+          try {
+            await interviewsAPI.addRealtimeChunk(appointmentId, chunk.text, chunk.speaker);
+            
+            setRealtimeTranscript(prev => {
+              const newLine = `[${chunk.speaker}]: ${chunk.text}`;
+              return prev ? `${prev}\n${newLine}` : newLine;
+            });
+          } catch (err) {
+            console.error('Failed to send transcript chunk:', err);
+            // Re-add to queue if failed
+            transcriptChunkQueueRef.current.unshift(chunk);
+          }
+        }
+
+        isProcessingChunkRef.current = false;
+        
+        // Process next chunk if available
+        if (transcriptChunkQueueRef.current.length > 0) {
+          setTimeout(processTranscriptQueue, 100);
+        }
+      };
+
+      recognition.onresult = async (event: any) => {
+        let finalTranscript = '';
+        let interimTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript.trim();
+          if (event.results[i].isFinal && transcript) {
+            finalTranscript = transcript;
+            const speaker = user?.role === 'doctor' ? 'Doctor' : 'Patient';
+            
+            // Queue the chunk for processing
+            transcriptChunkQueueRef.current.push({ text: transcript, speaker });
+            processTranscriptQueue();
+          } else if (transcript) {
+            interimTranscript += transcript;
+          }
+        }
+
+        const captionText = finalTranscript || interimTranscript;
+        if (captionText) {
+          setCurrentCaption(captionText);
+          // Auto-hide caption after 5 seconds
+          setTimeout(() => {
+            setCurrentCaption(prev => prev === captionText ? '' : prev);
+          }, 5000);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition error:', event.error);
+        
+        // Handle different error types
+        switch (event.error) {
+          case 'no-speech':
+            // User not speaking - this is normal, don't restart immediately
+            console.log('No speech detected, waiting...');
+            break;
+            
+          case 'audio-capture':
+            console.error('Microphone not available');
+            setError('Microphone not available. Please check your microphone settings.');
+            stopRealtimeTranscription();
+            break;
+            
+          case 'not-allowed':
+            console.error('Microphone permission denied');
+            setError('Microphone permission denied. Please allow microphone access.');
+            stopRealtimeTranscription();
+            break;
+            
+          case 'network':
+            // Network error - retry after delay
+            console.log('Network error, will retry...');
+            if (recognitionRestartTimeoutRef.current) {
+              clearTimeout(recognitionRestartTimeoutRef.current);
+            }
+            recognitionRestartTimeoutRef.current = setTimeout(() => {
+              if (isTranscribingRef.current && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start();
+                  console.log('Restarted speech recognition after network error');
+                } catch (e) {
+                  console.error('Failed to restart recognition:', e);
+                }
+              }
+            }, 2000);
+            break;
+            
+          case 'aborted':
+            // Recognition was aborted - restart if still transcribing
+            if (isTranscribingRef.current) {
+              setTimeout(() => {
+                if (recognitionRef.current) {
+                  try {
+                    recognitionRef.current.start();
+                  } catch (e) {
+                    console.error('Failed to restart after abort:', e);
+                  }
+                }
+              }, 500);
+            }
+            break;
+            
+          default:
+            console.error('Unknown speech recognition error:', event.error);
+        }
+      };
+
+      recognition.onend = () => {
+        console.log('Speech recognition ended');
+        // Auto-restart if still transcribing
+        if (isTranscribingRef.current && recognitionRef.current) {
+          if (recognitionRestartTimeoutRef.current) {
+            clearTimeout(recognitionRestartTimeoutRef.current);
+          }
+          recognitionRestartTimeoutRef.current = setTimeout(() => {
+            try {
+              if (recognitionRef.current) {
+                recognitionRef.current.start();
+                console.log('Restarted speech recognition');
+              }
+            } catch (e) {
+              console.error('Failed to restart recognition:', e);
+            }
+          }, 500);
+        }
+      };
+
+      recognition.onstart = () => {
+        console.log('✅ Speech recognition started');
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+
+      // Poll for transcript updates from backend
       transcriptIntervalRef.current = setInterval(async () => {
+        if (!isTranscribingRef.current) return;
+        
         try {
           const res = await interviewsAPI.getRealtimeTranscript(appointmentId);
           if (res.data.transcript) {
-            setRealtimeTranscript(res.data.transcript);
+            // Only update if different to avoid flickering
+            setRealtimeTranscript(prev => {
+              if (prev !== res.data.transcript) {
+                return res.data.transcript;
+              }
+              return prev;
+            });
           }
-        } catch (err) {
-          console.error('Failed to fetch transcript:', err);
+        } catch (err: any) {
+          // Only log non-401 errors (401 means other user's token)
+          if (err.response?.status !== 401) {
+            console.error('Failed to fetch transcript:', err);
+          }
         }
-      }, 3000);
+      }, 5000); // Poll every 5 seconds
     } catch (err) {
       console.error('Failed to start real-time transcription:', err);
+      setError('Failed to start transcription. Please try again.');
+      setIsTranscribing(false);
     }
-  }, [appointmentId, user, isTranscribing]);
+  }, [appointmentId, user]);
 
   const stopRealtimeTranscription = useCallback(async () => {
     if (!appointmentId) return;
 
     try {
+      console.log('Stopping transcription...');
+      isTranscribingRef.current = false;
+      
+      // Clear restart timeout
+      if (recognitionRestartTimeoutRef.current) {
+        clearTimeout(recognitionRestartTimeoutRef.current);
+        recognitionRestartTimeoutRef.current = null;
+      }
+      
+      // Stop recognition
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          console.warn('Error stopping recognition:', e);
+        }
         recognitionRef.current = null;
       }
 
+      // Clear polling interval
       if (transcriptIntervalRef.current) {
         clearInterval(transcriptIntervalRef.current);
         transcriptIntervalRef.current = null;
       }
 
+      // Process any remaining chunks in queue
+      while (transcriptChunkQueueRef.current.length > 0 && isProcessingChunkRef.current === false) {
+        const chunk = transcriptChunkQueueRef.current.shift();
+        if (chunk) {
+          try {
+            await interviewsAPI.addRealtimeChunk(appointmentId, chunk.text, chunk.speaker);
+          } catch (err) {
+            console.error('Failed to send final chunk:', err);
+          }
+        }
+      }
+
+      // End transcription session on backend
       await interviewsAPI.endRealtime(appointmentId);
       setIsTranscribing(false);
 
+      // Fetch final transcript
       const res = await interviewsAPI.getRealtimeTranscript(appointmentId);
       setRealtimeTranscript(res.data.transcript || '');
+      
+      console.log('✅ Transcription stopped successfully');
     } catch (err) {
       console.error('Failed to stop transcription:', err);
+      setIsTranscribing(false);
     }
   }, [appointmentId]);
 
   const generateSummary = async () => {
     if (!appointmentId) return;
 
+    // Validate transcript exists and has content
+    if (!realtimeTranscript || realtimeTranscript.trim().length < 50) {
+      setError('Transcript is too short to generate a summary. Please transcribe more content first.');
+      return;
+    }
+
     setIsGeneratingSummary(true);
+    setError(''); // Clear any previous errors
+    
     try {
+      console.log('Generating summary...');
       await interviewsAPI.generateSummary(appointmentId);
+      
       const res = await interviewsAPI.getSummary(appointmentId);
-      setSummary(res.data);
-      setShowSummaryPanel(true);
-    } catch (err) {
+      if (res.data && (res.data.summary || res.data.key_points)) {
+        setSummary(res.data);
+        setShowSummaryPanel(true);
+        console.log('✅ Summary generated successfully');
+      } else {
+        throw new Error('Summary generation returned empty results');
+      }
+    } catch (err: any) {
       console.error('Failed to generate summary:', err);
+      const errorMsg = err.response?.data?.detail || err.message || 'Failed to generate summary';
+      setError(`Summary generation failed: ${errorMsg}. Please try again.`);
     } finally {
       setIsGeneratingSummary(false);
     }
@@ -560,12 +981,60 @@ const InterviewRoom: React.FC = () => {
   };
 
   const cleanup = () => {
-    if (localStream) localStream.getTracks().forEach((track) => track.stop());
-    if (wsRef.current) wsRef.current.close();
-    if (pcRef.current) pcRef.current.close();
-    if (recognitionRef.current) recognitionRef.current.stop();
-    if (transcriptIntervalRef.current) clearInterval(transcriptIntervalRef.current);
-    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    console.log('Cleaning up resources...');
+    
+    // Stop local media
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+    }
+    
+    // Close WebSocket
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    
+    // Close peer connection
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    
+    // Stop speech recognition
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.warn('Error stopping recognition during cleanup:', e);
+      }
+      recognitionRef.current = null;
+    }
+    
+    // Clear all intervals and timeouts
+    if (transcriptIntervalRef.current) {
+      clearInterval(transcriptIntervalRef.current);
+      transcriptIntervalRef.current = null;
+    }
+    
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+    
+    if (recognitionRestartTimeoutRef.current) {
+      clearTimeout(recognitionRestartTimeoutRef.current);
+      recognitionRestartTimeoutRef.current = null;
+    }
+    
+    // Clear transcript queue
+    transcriptChunkQueueRef.current = [];
+    isProcessingChunkRef.current = false;
+    
+    console.log('✅ Cleanup complete');
   };
 
   if (isLoading) {
@@ -605,6 +1074,35 @@ const InterviewRoom: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col">
+      {/* Transcript Panel Overlay */}
+      {(showTranscriptPanel || isTranscribing) && (
+        <div className="fixed left-6 top-24 bottom-24 w-80 bg-white/95 backdrop-blur-md shadow-2xl rounded-2xl overflow-hidden flex flex-col z-50 transition-all duration-300 border border-white/20">
+            <div className="p-4 bg-gray-50/90 border-b flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                    <FileText className="h-5 w-5 text-indigo-600" />
+                    <h3 className="font-semibold text-gray-800">Live Transcript</h3>
+                </div>
+                {isTranscribing && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-red-50 text-red-600 rounded-full text-xs font-medium animate-pulse">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-600"></span>
+                        LIVE
+                    </div>
+                )}
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-sm bg-gray-50/50">
+               {realtimeTranscript ? (
+                 <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
+                   {realtimeTranscript}
+                 </div>
+               ) : (
+                 <div className="text-gray-400 text-center italic mt-10">
+                   Waiting for speech...
+                 </div>
+               )}
+            </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-slate-800/50 backdrop-blur-xl border-b border-slate-700/50 px-4 lg:px-6 py-3">
         <div className="flex items-center justify-between">
