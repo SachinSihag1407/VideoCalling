@@ -28,7 +28,7 @@ async def migrate():
                 ALTER TABLE appointments 
                 ADD COLUMN IF NOT EXISTS meeting_number VARCHAR(20);
             """))
-            print("✅ Added meeting_number column to appointments")
+            print(" Added meeting_number column to appointments")
         except Exception as e:
             print(f"Note: meeting_number column - {e}")
         
@@ -38,7 +38,7 @@ async def migrate():
                 ALTER TABLE interviews 
                 ADD COLUMN IF NOT EXISTS summary_text TEXT;
             """))
-            print("✅ Added summary_text column to interviews")
+            print(" Added summary_text column to interviews")
         except Exception as e:
             print(f"Note: summary_text column - {e}")
         
@@ -48,7 +48,7 @@ async def migrate():
                 ALTER TABLE interviews 
                 ADD COLUMN IF NOT EXISTS key_points TEXT;
             """))
-            print("✅ Added key_points column to interviews")
+            print(" Added key_points column to interviews")
         except Exception as e:
             print(f"Note: key_points column - {e}")
         
@@ -60,7 +60,7 @@ async def migrate():
                     UPPER(SUBSTRING(MD5(RANDOM()::TEXT) FROM 1 FOR 6)))
                 WHERE meeting_number IS NULL;
             """))
-            print("✅ Updated existing appointments with meeting numbers")
+            print(" Updated existing appointments with meeting numbers")
         except Exception as e:
             print(f"Note: updating meeting numbers - {e}")
     

@@ -2,11 +2,24 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { User } from '../types';
 import { authAPI } from '../services/api';
 
+interface AdditionalData {
+  // Patient fields
+  date_of_birth?: string;
+  blood_group?: string;
+  emergency_contact?: string;
+  address?: string;
+  // Doctor fields
+  specialization?: string;
+  license_number?: string;
+  hospital_affiliation?: string;
+  years_of_experience?: number;
+}
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, fullName: string, role: string) => Promise<void>;
+  register: (email: string, password: string, fullName: string, role: string, phone: string, additionalData?: AdditionalData) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
 }
@@ -61,8 +74,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const register = async (email: string, password: string, fullName: string, role: string) => {
-    await authAPI.register({ email, password, full_name: fullName, role });
+  const register = async (email: string, password: string, fullName: string, role: string, phone: string, additionalData?: AdditionalData) => {
+    await authAPI.register({ email, password, full_name: fullName, role, phone, ...additionalData });
     await login(email, password);
   };
 

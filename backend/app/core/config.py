@@ -16,11 +16,24 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     
     # Storage
-    storage_provider: str = "local"
+    storage_provider: str = "local"  # Change to "s3" for production
     local_storage_path: str = "./storage"
     
-    # Transcription
-    transcription_mode: str = "mock"  # 'whisper' or 'mock'
+    # AWS S3 Configuration (required when storage_provider="s3")
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_region: str = "us-east-1"
+    s3_bucket_name: str = ""
+    
+    # Email/SMTP Configuration
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    from_email: str = "noreply@careplatform.com"
+    
+    # Scheduler
+    enable_scheduler: bool = True  # Set to False to disable automated reminders
     
     # Server
     host: str = "0.0.0.0"

@@ -4,15 +4,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core import init_db
 from app.api import api_router
+from app.services.scheduler import get_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     await init_db()
+    
+    # Initialize and start notification scheduler
+    scheduler = await get_scheduler()
+    scheduler.start()
+    
     yield
+    
     # Shutdown
-    pass
+    scheduler.shutdown()
 
 
 app = FastAPI(

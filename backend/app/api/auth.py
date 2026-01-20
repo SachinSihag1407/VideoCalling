@@ -34,7 +34,18 @@ async def register(
         email=user_data.email,
         full_name=user_data.full_name,
         role=user_data.role,
-        password_hash=get_password_hash(user_data.password)
+        phone=user_data.phone,
+        password_hash=get_password_hash(user_data.password),
+        # Patient-specific fields
+        date_of_birth=user_data.date_of_birth,
+        blood_group=user_data.blood_group,
+        emergency_contact=user_data.emergency_contact,
+        address=user_data.address,
+        # Doctor-specific fields
+        specialization=user_data.specialization,
+        license_number=user_data.license_number,
+        hospital_affiliation=user_data.hospital_affiliation,
+        years_of_experience=user_data.years_of_experience
     )
     
     session.add(user)

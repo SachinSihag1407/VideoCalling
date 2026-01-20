@@ -37,6 +37,17 @@ class UserBase(SQLModel):
     email: str = Field(unique=True, index=True)
     full_name: str
     role: UserRole
+    phone: Optional[str] = None
+    # Patient-specific fields
+    date_of_birth: Optional[str] = None
+    blood_group: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    address: Optional[str] = None
+    # Doctor-specific fields
+    specialization: Optional[str] = None
+    license_number: Optional[str] = None
+    hospital_affiliation: Optional[str] = None
+    years_of_experience: Optional[int] = None
 
 
 class User(UserBase, table=True):
@@ -111,6 +122,12 @@ class Appointment(AppointmentBase, table=True):
 class NotificationType(str, Enum):
     APPOINTMENT_REMINDER = "appointment_reminder"
     APPOINTMENT_CONFIRMATION = "appointment_confirmation"
+    APPOINTMENT_BOOKING = "appointment_booking"
+    APPOINTMENT_CANCELLED = "appointment_cancelled"
+    DOCTOR_WAITING_REMINDER = "doctor_waiting_reminder"
+    PATIENT_WAITING = "patient_waiting"
+    UPCOMING_REMINDER_1HR = "upcoming_reminder_1hr"
+    UPCOMING_REMINDER_15MIN = "upcoming_reminder_15min"
     TEST_RESULT = "test_result"
 
 

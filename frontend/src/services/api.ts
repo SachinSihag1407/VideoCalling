@@ -39,8 +39,23 @@ api.interceptors.response.use(
 
 // Auth API
 export const authAPI = {
-  register: (data: { email: string; password: string; full_name: string; role: string }) =>
-    api.post('/auth/register', data),
+  register: (data: { 
+    email: string; 
+    password: string; 
+    full_name: string; 
+    role: string;
+    phone: string;
+    // Patient fields
+    date_of_birth?: string;
+    blood_group?: string;
+    emergency_contact?: string;
+    address?: string;
+    // Doctor fields
+    specialization?: string;
+    license_number?: string;
+    hospital_affiliation?: string;
+    years_of_experience?: number;
+  }) => api.post('/auth/register', data),
   
   login: (email: string, password: string) =>
     api.post('/auth/login/json', { email, password }),
@@ -133,6 +148,32 @@ export const auditAPI = {
   
   getMyActivity: (limit?: number) =>
     api.get('/audit/my-activity', { params: limit ? { limit } : {} }),
+};
+
+// Notifications API
+export const notificationsAPI = {
+  // Get user's notifications
+  getNotifications: (limit?: number, unreadOnly?: boolean) =>
+    api.get('/notifications/', { params: { limit, unread_only: unreadOnly } }),
+  
+  // Mark notification as read
+  markAsRead: (notificationId: string) =>
+    api.patch(`/notifications/${notificationId}/read`),
+  
+  // Mark all notifications as read
+  markAllAsRead: () =>
+    api.patch('/notifications/mark-all-read'),
+  
+  // Get unread count
+  getUnreadCount: () =>
+    api.get('/notifications/unread-count'),
+  
+  // Notify doctor that patient is waiting (call this when patient joins and doctor hasn't)
+  notifyPatientWaiting: (appointmentId: string, waitingMinutes: number = 5) =>
+    api.post('/notifications/patient-waiting', { 
+      appointment_id: appointmentId, 
+      waiting_minutes: waitingMinutes 
+    }),
 };
 
 export default api;
