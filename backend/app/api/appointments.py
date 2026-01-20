@@ -58,7 +58,7 @@ async def create_appointment(
     # Send Notification
     try:
         notif_service = NotificationService(session)
-        await notif_service.notify_appointment_confirmation(appointment, current_user, doctor)
+        await notif_service.notify_appointment_booking(appointment, current_user, doctor)
     except Exception as e:
         # Don't fail the appointment creation if notification fails
         print(f"Failed to send notifications: {e}")
@@ -182,6 +182,7 @@ async def update_appointment(
         )
     
     # Apply status rules
+    old_status = appointment.status
     if update_data.status:
         if update_data.status == AppointmentStatus.CONFIRMED:
             if current_user.role != UserRole.DOCTOR:
@@ -208,6 +209,21 @@ async def update_appointment(
     
     await session.commit()
     await session.refresh(appointment)
+    
+    # Send notifications based on status change
+    if update_data.status and update_data.status != old_status:
+        try:
+            notif_service = NotificationService(session)
+            patient = appointment.patient
+            doctor = appointment.doctor
+            
+            if update_data.status == AppointmentStatus.CONFIRMED:
+                await notif_service.notify_appointment_confirmation(appointment, patient, doctor)
+            elif update_data.status == AppointmentStatus.CANCELLED:
+                cancelled_by_role = "doctor" if current_user.role == UserRole.DOCTOR else "patient"
+                await notif_service.notify_appointment_cancelled(appointment, patient, doctor, cancelled_by_role)
+        except Exception as e:
+            print(f"Failed to send status change notification: {e}")
     
     # Log the update
     audit_service = get_audit_service(session)

@@ -14,3 +14,11 @@ websockets==12.0
 python-dotenv==1.0.0
 aiofiles==23.2.1
 httpx==0.26.0
+apscheduler==3.10.4
+
+# AWS S3 for production storage
+boto3==1.34.34
+aioboto3==12.3.0
+
+# AI/ML for production transcription
+openai-whisper

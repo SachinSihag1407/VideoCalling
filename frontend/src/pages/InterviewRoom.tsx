@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { appointmentsAPI, consentAPI, interviewsAPI } from '../services/api';
+import { appointmentsAPI, consentAPI, interviewsAPI, notificationsAPI } from '../services/api';
 import { Appointment, Consent, Interview } from '../types';
 import {
   Video,
@@ -57,7 +57,7 @@ const InterviewRoom: React.FC = () => {
   const [callStatus, setCallStatus] = useState<'connecting' | 'connected' | 'ended'>('connecting');
   const [callDuration, setCallDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  
+
   // Real-time transcription state
   const [realtimeTranscript, setRealtimeTranscript] = useState<string>('');
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -81,7 +81,7 @@ const InterviewRoom: React.FC = () => {
   const localStreamRef = useRef<MediaStream | null>(null);
   const appointmentRef = useRef<Appointment | null>(null);
   const recognitionRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const transcriptChunkQueueRef = useRef<{text: string, speaker: string}[]>([]);
+  const transcriptChunkQueueRef = useRef<{ text: string, speaker: string }[]>([]);
   const isProcessingChunkRef = useRef(false);
 
   useEffect(() => {
@@ -138,6 +138,29 @@ const InterviewRoom: React.FC = () => {
     };
   }, [callStatus]);
 
+  // Notify doctor if patient is waiting for 5 minutes
+  useEffect(() => {
+    // Only patient triggers waiting notification
+    if (user?.role === 'patient' && appointment && appointment.status === 'confirmed') {
+      let waitingTimer: ReturnType<typeof setTimeout> | null = null;
+      // If call is not connected after 5 minutes, notify doctor
+      if (callStatus === 'connecting') {
+        waitingTimer = setTimeout(() => {
+          notificationsAPI.notifyPatientWaiting(appointment.id, 5)
+            .then(() => {
+              console.log('Sent doctor waiting notification');
+            })
+            .catch((err) => {
+              console.error('Failed to send doctor waiting notification', err);
+            });
+        }, 5 * 60 * 1000); // 5 minutes
+      }
+      return () => {
+        if (waitingTimer) clearTimeout(waitingTimer);
+      };
+    }
+  }, [user, appointment, callStatus]);
+
   const formatDuration = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -156,14 +179,14 @@ const InterviewRoom: React.FC = () => {
       ]);
 
       const apptData = appointmentRes.data;
-      
+
       // Set both state and ref immediately
       setAppointment(apptData);
       appointmentRef.current = apptData;
-      console.log('✅ Appointment loaded:', { 
-        id: apptData.id, 
-        doctor_id: apptData.doctor_id, 
-        patient_id: apptData.patient_id 
+      console.log(' Appointment loaded:', {
+        id: apptData.id,
+        doctor_id: apptData.doctor_id,
+        patient_id: apptData.patient_id
       });
 
       if (consentRes?.data) {
@@ -195,19 +218,19 @@ const InterviewRoom: React.FC = () => {
         audio: true,
       });
       console.log('Media access granted, tracks:', stream.getTracks().map(t => t.kind));
-      
+
       // Store in both ref and state
       localStreamRef.current = stream;
       setLocalStream(stream);
-      
+
       // Set video element directly
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
         console.log('Local video element set');
       }
-      
+
       setCallStatus('connecting');
-      
+
       // Connect WebSocket after media is ready
       if (apptData?.room_id) {
         connectWebSocket(apptData.room_id);
@@ -236,28 +259,28 @@ const InterviewRoom: React.FC = () => {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('✅ WebSocket connected successfully');
+      console.log(' WebSocket connected successfully');
       console.log('Sending ready message with user_id:', user?.id);
       ws.send(JSON.stringify({ type: 'ready', user_id: user?.id }));
     };
-    
+
     ws.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
         console.log('📨 Received signaling message:', data.type, data);
         await handleSignalingMessage(data);
       } catch (error) {
-         console.error('❌ Failed to handle signaling message:', error, event.data);
+        console.error('❌ Failed to handle signaling message:', error, event.data);
       }
     };
-    
+
     ws.onerror = (err) => console.error('❌ WebSocket error:', err);
     ws.onclose = () => console.log('🔌 WebSocket closed');
   };
 
   const handleSignalingMessage = async (data: any) => {
     console.log('🔄 Handling signaling message:', data.type);
-    
+
     switch (data.type) {
       case 'room-info':
         console.log('🏠 Room info received:', {
@@ -273,7 +296,7 @@ const InterviewRoom: React.FC = () => {
           console.log('⏳ Waiting for other participant...');
         }
         break;
-        
+
       case 'user-joined':
         console.log('👤 User joined:', data.user_id, 'My ID:', user?.id);
         if (data.user_id !== user?.id) {
@@ -288,42 +311,42 @@ const InterviewRoom: React.FC = () => {
           console.log('ℹ️ Ignoring self-join message');
         }
         break;
-        
+
       case 'offer':
         console.log('📩 Received offer from:', data.from_id);
         await handleOffer(data);
         break;
-        
+
       case 'answer':
         console.log('✉️ Received answer from:', data.from_id);
         await handleAnswer(data);
         break;
-        
+
       case 'ice-candidate':
         console.log('🧊 Received ICE candidate');
         await handleIceCandidate(data);
         break;
-        
+
       case 'consent-requested':
         console.log('📋 Consent requested');
         if (user?.role === 'patient') setShowConsentModal(true);
         break;
-        
+
       case 'consent-response':
-        console.log('✅ Consent response:', data.granted);
+        console.log(' Consent response:', data.granted);
         if (data.granted) await loadConsentStatus();
         break;
-        
+
       case 'recording-started':
         console.log('🔴 Recording started');
         setIsRecording(true);
         break;
-        
+
       case 'recording-stopped':
         console.log('⏹️ Recording stopped');
         setIsRecording(false);
         break;
-        
+
       case 'user-left':
         console.log('👋 User left:', data.user_id);
         // Reset connection state when remote user leaves
@@ -336,7 +359,7 @@ const InterviewRoom: React.FC = () => {
           }
         }
         break;
-        
+
       default:
         console.log('❓ Unknown message type:', data.type);
     }
@@ -411,7 +434,7 @@ const InterviewRoom: React.FC = () => {
       return '';
     }
     const remoteId = user.role === 'doctor' ? appt.patient_id : appt.doctor_id;
-    console.log('✅ Remote user ID:', remoteId, '(I am', user.role + ')');
+    console.log(' Remote user ID:', remoteId, '(I am', user.role + ')');
     return remoteId;
   };
 
@@ -419,27 +442,27 @@ const InterviewRoom: React.FC = () => {
     try {
       console.log('🎯 Creating offer...');
       const remoteUserId = getRemoteUserId();
-      
+
       if (!remoteUserId) {
         console.error('❌ Cannot create offer - no remote user ID available');
         return;
       }
-      
+
       console.log('Current state:', {
         hasLocalStream: !!localStreamRef.current,
         localStreamTracks: localStreamRef.current?.getTracks().length,
         hasExistingPC: !!pcRef.current,
         remoteUserId
       });
-      
+
       const pc = createPeerConnection();
-      console.log('✅ Peer connection created');
-      
+      console.log(' Peer connection created');
+
       const offer = await pc.createOffer();
-      console.log('✅ Offer created:', offer.type);
-      
+      console.log(' Offer created:', offer.type);
+
       await pc.setLocalDescription(offer);
-      console.log('✅ Local description set');
+      console.log(' Local description set');
 
       if (wsRef.current) {
         const message = {
@@ -466,18 +489,18 @@ const InterviewRoom: React.FC = () => {
         localStreamTracks: localStreamRef.current?.getTracks().length,
         hasExistingPC: !!pcRef.current
       });
-      
+
       const pc = createPeerConnection();
-      console.log('✅ Peer connection created for answer');
-      
+      console.log(' Peer connection created for answer');
+
       await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-      console.log('✅ Remote description set');
-      
+      console.log(' Remote description set');
+
       const answer = await pc.createAnswer();
-      console.log('✅ Answer created:', answer.type);
-      
+      console.log(' Answer created:', answer.type);
+
       await pc.setLocalDescription(answer);
-      console.log('✅ Local description set with answer');
+      console.log(' Local description set with answer');
 
       if (wsRef.current) {
         const message = {
@@ -499,11 +522,11 @@ const InterviewRoom: React.FC = () => {
     try {
       console.log('🎯 Handling answer from:', data.from_id);
       console.log('Answer details:', data.answer?.type);
-      
+
       if (pcRef.current) {
         console.log('Current PC state:', pcRef.current.signalingState);
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-        console.log('✅ Remote description set with answer');
+        console.log(' Remote description set with answer');
         console.log('New PC state:', pcRef.current.signalingState);
       } else {
         console.error('❌ No peer connection exists to handle answer');
@@ -519,7 +542,7 @@ const InterviewRoom: React.FC = () => {
       if (pcRef.current && data.candidate) {
         console.log('Adding ICE candidate to peer connection');
         await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
-        console.log('✅ ICE candidate added');
+        console.log(' ICE candidate added');
       } else {
         if (!pcRef.current) console.error('❌ No peer connection to add ICE candidate');
         if (!data.candidate) console.error('❌ No candidate data received');
@@ -583,7 +606,7 @@ const InterviewRoom: React.FC = () => {
       if (!consent) {
         await consentAPI.create(appointmentId);
       }
-      
+
       await consentAPI.update(appointmentId, granted ? 'granted' : 'denied');
       await loadConsentStatus();
       setShowConsentModal(false);
@@ -642,16 +665,16 @@ const InterviewRoom: React.FC = () => {
 
     try {
       const stopPromise = new Promise<void>((resolve) => {
-         if (mediaRecorderRef.current) {
-            mediaRecorderRef.current.onstop = () => resolve();
-         } else {
-            resolve();
-         }
+        if (mediaRecorderRef.current) {
+          mediaRecorderRef.current.onstop = () => resolve();
+        } else {
+          resolve();
+        }
       });
-      
+
       mediaRecorderRef.current.stop();
       await stopPromise;
-      
+
       setIsRecording(false);
 
       const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
@@ -706,7 +729,7 @@ const InterviewRoom: React.FC = () => {
         if (chunk) {
           try {
             await interviewsAPI.addRealtimeChunk(appointmentId, chunk.text, chunk.speaker);
-            
+
             setRealtimeTranscript(prev => {
               const newLine = `[${chunk.speaker}]: ${chunk.text}`;
               return prev ? `${prev}\n${newLine}` : newLine;
@@ -719,7 +742,7 @@ const InterviewRoom: React.FC = () => {
         }
 
         isProcessingChunkRef.current = false;
-        
+
         // Process next chunk if available
         if (transcriptChunkQueueRef.current.length > 0) {
           setTimeout(processTranscriptQueue, 100);
@@ -735,7 +758,7 @@ const InterviewRoom: React.FC = () => {
           if (event.results[i].isFinal && transcript) {
             finalTranscript = transcript;
             const speaker = user?.role === 'doctor' ? 'Doctor' : 'Patient';
-            
+
             // Queue the chunk for processing
             transcriptChunkQueueRef.current.push({ text: transcript, speaker });
             processTranscriptQueue();
@@ -756,26 +779,26 @@ const InterviewRoom: React.FC = () => {
 
       recognition.onerror = (event: any) => {
         console.warn('Speech recognition error:', event.error);
-        
+
         // Handle different error types
         switch (event.error) {
           case 'no-speech':
             // User not speaking - this is normal, don't restart immediately
             console.log('No speech detected, waiting...');
             break;
-            
+
           case 'audio-capture':
             console.error('Microphone not available');
             setError('Microphone not available. Please check your microphone settings.');
             stopRealtimeTranscription();
             break;
-            
+
           case 'not-allowed':
             console.error('Microphone permission denied');
             setError('Microphone permission denied. Please allow microphone access.');
             stopRealtimeTranscription();
             break;
-            
+
           case 'network':
             // Network error - retry after delay
             console.log('Network error, will retry...');
@@ -793,7 +816,7 @@ const InterviewRoom: React.FC = () => {
               }
             }, 2000);
             break;
-            
+
           case 'aborted':
             // Recognition was aborted - restart if still transcribing
             if (isTranscribingRef.current) {
@@ -808,7 +831,7 @@ const InterviewRoom: React.FC = () => {
               }, 500);
             }
             break;
-            
+
           default:
             console.error('Unknown speech recognition error:', event.error);
         }
@@ -835,7 +858,7 @@ const InterviewRoom: React.FC = () => {
       };
 
       recognition.onstart = () => {
-        console.log('✅ Speech recognition started');
+        console.log(' Speech recognition started');
       };
 
       recognitionRef.current = recognition;
@@ -844,7 +867,7 @@ const InterviewRoom: React.FC = () => {
       // Poll for transcript updates from backend
       transcriptIntervalRef.current = setInterval(async () => {
         if (!isTranscribingRef.current) return;
-        
+
         try {
           const res = await interviewsAPI.getRealtimeTranscript(appointmentId);
           if (res.data.transcript) {
@@ -876,13 +899,13 @@ const InterviewRoom: React.FC = () => {
     try {
       console.log('Stopping transcription...');
       isTranscribingRef.current = false;
-      
+
       // Clear restart timeout
       if (recognitionRestartTimeoutRef.current) {
         clearTimeout(recognitionRestartTimeoutRef.current);
         recognitionRestartTimeoutRef.current = null;
       }
-      
+
       // Stop recognition
       if (recognitionRef.current) {
         try {
@@ -918,8 +941,8 @@ const InterviewRoom: React.FC = () => {
       // Fetch final transcript
       const res = await interviewsAPI.getRealtimeTranscript(appointmentId);
       setRealtimeTranscript(res.data.transcript || '');
-      
-      console.log('✅ Transcription stopped successfully');
+
+      console.log(' Transcription stopped successfully');
     } catch (err) {
       console.error('Failed to stop transcription:', err);
       setIsTranscribing(false);
@@ -937,16 +960,16 @@ const InterviewRoom: React.FC = () => {
 
     setIsGeneratingSummary(true);
     setError(''); // Clear any previous errors
-    
+
     try {
       console.log('Generating summary...');
       await interviewsAPI.generateSummary(appointmentId);
-      
+
       const res = await interviewsAPI.getSummary(appointmentId);
       if (res.data && (res.data.summary || res.data.key_points)) {
         setSummary(res.data);
         setShowSummaryPanel(true);
-        console.log('✅ Summary generated successfully');
+        console.log(' Summary generated successfully');
       } else {
         throw new Error('Summary generation returned empty results');
       }
@@ -982,7 +1005,7 @@ const InterviewRoom: React.FC = () => {
 
   const cleanup = () => {
     console.log('Cleaning up resources...');
-    
+
     // Stop local media
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -991,19 +1014,19 @@ const InterviewRoom: React.FC = () => {
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
     }
-    
+
     // Close WebSocket
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-    
+
     // Close peer connection
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
     }
-    
+
     // Stop speech recognition
     if (recognitionRef.current) {
       try {
@@ -1013,28 +1036,28 @@ const InterviewRoom: React.FC = () => {
       }
       recognitionRef.current = null;
     }
-    
+
     // Clear all intervals and timeouts
     if (transcriptIntervalRef.current) {
       clearInterval(transcriptIntervalRef.current);
       transcriptIntervalRef.current = null;
     }
-    
+
     if (callTimerRef.current) {
       clearInterval(callTimerRef.current);
       callTimerRef.current = null;
     }
-    
+
     if (recognitionRestartTimeoutRef.current) {
       clearTimeout(recognitionRestartTimeoutRef.current);
       recognitionRestartTimeoutRef.current = null;
     }
-    
+
     // Clear transcript queue
     transcriptChunkQueueRef.current = [];
     isProcessingChunkRef.current = false;
-    
-    console.log('✅ Cleanup complete');
+
+    console.log(' Cleanup complete');
   };
 
   if (isLoading) {
@@ -1077,29 +1100,29 @@ const InterviewRoom: React.FC = () => {
       {/* Transcript Panel Overlay */}
       {(showTranscriptPanel || isTranscribing) && (
         <div className="fixed left-6 top-24 bottom-24 w-80 bg-white/95 backdrop-blur-md shadow-2xl rounded-2xl overflow-hidden flex flex-col z-50 transition-all duration-300 border border-white/20">
-            <div className="p-4 bg-gray-50/90 border-b flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                    <FileText className="h-5 w-5 text-indigo-600" />
-                    <h3 className="font-semibold text-gray-800">Live Transcript</h3>
-                </div>
-                {isTranscribing && (
-                    <div className="flex items-center gap-1.5 px-2 py-1 bg-red-50 text-red-600 rounded-full text-xs font-medium animate-pulse">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-600"></span>
-                        LIVE
-                    </div>
-                )}
+          <div className="p-4 bg-gray-50/90 border-b flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-indigo-600" />
+              <h3 className="font-semibold text-gray-800">Live Transcript</h3>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-sm bg-gray-50/50">
-               {realtimeTranscript ? (
-                 <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
-                   {realtimeTranscript}
-                 </div>
-               ) : (
-                 <div className="text-gray-400 text-center italic mt-10">
-                   Waiting for speech...
-                 </div>
-               )}
-            </div>
+            {isTranscribing && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-red-50 text-red-600 rounded-full text-xs font-medium animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-600"></span>
+                LIVE
+              </div>
+            )}
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-sm bg-gray-50/50">
+            {realtimeTranscript ? (
+              <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
+                {realtimeTranscript}
+              </div>
+            ) : (
+              <div className="text-gray-400 text-center italic mt-10">
+                Waiting for speech...
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1239,11 +1262,10 @@ const InterviewRoom: React.FC = () => {
               {/* Basic Controls */}
               <button
                 onClick={toggleAudio}
-                className={`p-4 rounded-2xl transition-all ${
-                  isAudioOn 
-                    ? 'bg-slate-700 hover:bg-slate-600 text-white' 
+                className={`p-4 rounded-2xl transition-all ${isAudioOn
+                    ? 'bg-slate-700 hover:bg-slate-600 text-white'
                     : 'bg-red-500 hover:bg-red-600 text-white'
-                }`}
+                  }`}
                 title={isAudioOn ? 'Mute' : 'Unmute'}
               >
                 {isAudioOn ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
@@ -1251,11 +1273,10 @@ const InterviewRoom: React.FC = () => {
 
               <button
                 onClick={toggleVideo}
-                className={`p-4 rounded-2xl transition-all ${
-                  isVideoOn 
-                    ? 'bg-slate-700 hover:bg-slate-600 text-white' 
+                className={`p-4 rounded-2xl transition-all ${isVideoOn
+                    ? 'bg-slate-700 hover:bg-slate-600 text-white'
                     : 'bg-red-500 hover:bg-red-600 text-white'
-                }`}
+                  }`}
                 title={isVideoOn ? 'Turn off camera' : 'Turn on camera'}
               >
                 {isVideoOn ? <Video className="w-6 h-6" /> : <VideoOff className="w-6 h-6" />}
@@ -1299,11 +1320,10 @@ const InterviewRoom: React.FC = () => {
               {consent?.status === 'granted' && (
                 <button
                   onClick={isTranscribing ? stopRealtimeTranscription : startRealtimeTranscription}
-                  className={`px-5 py-4 rounded-2xl flex items-center space-x-2 transition-all ${
-                    isTranscribing 
-                      ? 'bg-purple-500 hover:bg-purple-600' 
+                  className={`px-5 py-4 rounded-2xl flex items-center space-x-2 transition-all ${isTranscribing
+                      ? 'bg-purple-500 hover:bg-purple-600'
                       : 'bg-slate-700 hover:bg-slate-600'
-                  } text-white`}
+                    } text-white`}
                   title={isTranscribing ? 'Stop transcription' : 'Start transcription'}
                 >
                   <MessageSquare className="w-5 h-5" />
@@ -1315,9 +1335,8 @@ const InterviewRoom: React.FC = () => {
               {isTranscribing && (
                 <button
                   onClick={() => setShowCaptions(!showCaptions)}
-                  className={`p-4 rounded-2xl transition-all ${
-                    showCaptions ? 'bg-blue-500 text-white' : 'bg-slate-700 text-gray-400'
-                  }`}
+                  className={`p-4 rounded-2xl transition-all ${showCaptions ? 'bg-blue-500 text-white' : 'bg-slate-700 text-gray-400'
+                    }`}
                   title={showCaptions ? 'Hide captions' : 'Show captions'}
                 >
                   {showCaptions ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
@@ -1328,9 +1347,8 @@ const InterviewRoom: React.FC = () => {
               {realtimeTranscript && (
                 <button
                   onClick={() => setShowTranscriptPanel(!showTranscriptPanel)}
-                  className={`p-4 rounded-2xl transition-all ${
-                    showTranscriptPanel ? 'bg-blue-500 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'
-                  }`}
+                  className={`p-4 rounded-2xl transition-all ${showTranscriptPanel ? 'bg-blue-500 text-white' : 'bg-slate-700 text-white hover:bg-slate-600'
+                    }`}
                   title="Toggle transcript panel"
                 >
                   <FileText className="w-5 h-5" />
@@ -1342,11 +1360,10 @@ const InterviewRoom: React.FC = () => {
                 <button
                   onClick={generateSummary}
                   disabled={isGeneratingSummary}
-                  className={`px-5 py-4 rounded-2xl flex items-center space-x-2 transition-all ${
-                    isGeneratingSummary 
-                      ? 'bg-slate-600 cursor-wait' 
+                  className={`px-5 py-4 rounded-2xl flex items-center space-x-2 transition-all ${isGeneratingSummary
+                      ? 'bg-slate-600 cursor-wait'
                       : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600'
-                  } text-white`}
+                    } text-white`}
                 >
                   {isGeneratingSummary ? (
                     <RefreshCw className="w-5 h-5 animate-spin" />
@@ -1457,7 +1474,7 @@ const InterviewRoom: React.FC = () => {
 
             <div className="bg-slate-700/50 rounded-xl p-4 mb-6">
               <p className="text-gray-300 text-sm">
-                By granting consent, you agree that this video consultation may be recorded and transcribed 
+                By granting consent, you agree that this video consultation may be recorded and transcribed
                 for medical record keeping purposes. You can revoke this consent at any time.
               </p>
             </div>

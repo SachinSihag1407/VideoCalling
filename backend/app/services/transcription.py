@@ -4,67 +4,55 @@ import subprocess
 import json
 from datetime import datetime
 from typing import Optional, List, Dict
-from app.core.config import get_settings
-
-settings = get_settings()
 
 
 class TranscriptionService:
+    """
+    Production-grade transcription service using OpenAI Whisper.
+    Requires: pip install openai-whisper
+    """
+    
     def __init__(self):
-        self.mode = settings.transcription_mode
-        self._model = None
-        self._realtime_transcripts: Dict[str, List[str]] = {}  # appointment_id -> list of transcript chunks
+        self.model = None
+        self._realtime_transcripts: Dict[str, List[str]] = {}
+        self._load_model()
     
-    def _load_whisper_model(self):
-        if self._model is None and self.mode == "whisper":
-            import whisper
-            self._model = whisper.load_model("base")
-        return self._model
-    
-    async def transcribe(self, audio_path: str) -> Optional[str]:
-        """Transcribe audio file to text."""
-        if self.mode == "mock":
-            return self._mock_transcription(audio_path)
-        elif self.mode == "whisper":
-            return await self._whisper_transcription(audio_path)
-        return None
-    
-    def _mock_transcription(self, audio_path: str) -> str:
-        """Generate mock transcription for demo purposes."""
-        return """[Medical Interview Transcript]
-
-Doctor: Good morning. How are you feeling today?
-
-Patient: I've been having some headaches for the past week.
-
-Doctor: Can you describe the pain? Is it constant or does it come and go?
-
-Patient: It comes and goes, mostly in the afternoon. It's a throbbing pain on the right side.
-
-Doctor: Have you noticed any triggers? Like stress, certain foods, or lack of sleep?
-
-Patient: Now that you mention it, I have been under a lot of stress at work lately.
-
-Doctor: That could certainly be a factor. Have you been getting enough sleep?
-
-Patient: Not really, maybe 5-6 hours a night.
-
-Doctor: I see. Let's discuss some lifestyle changes and possibly some medication options.
-
-[End of Transcript]"""
-    
-    async def _whisper_transcription(self, audio_path: str) -> Optional[str]:
-        """Use OpenAI Whisper for real transcription."""
+    def _load_model(self):
+        """Load Whisper model on initialization."""
         try:
-            model = self._load_whisper_model()
-            result = model.transcribe(audio_path)
-            return result["text"]
+            import whisper
+            self.model = whisper.load_model("base")
+            print("Whisper model loaded successfully")
+        except ImportError:
+            print("WARNING: openai-whisper not installed. Transcription will fail.")
+            print("   Install with: pip install openai-whisper")
+            self.model = None
         except Exception as e:
-            print(f"Whisper transcription error: {e}")
-            return self._mock_transcription(audio_path)
+            print(f"WARNING: Failed to load Whisper model: {e}")
+            self.model = None
+    
+    @property
+    def is_available(self) -> bool:
+        """Check if Whisper is available."""
+        return self.model is not None
+    
+    async def transcribe(self, audio_path: str) -> str:
+        """Transcribe audio file using Whisper AI."""
+        if not self.model:
+            raise RuntimeError(
+                "Whisper model not loaded. Please install openai-whisper: "
+                "pip install openai-whisper"
+            )
+        
+        try:
+            result = self.model.transcribe(audio_path, language="en")
+            return result["text"].strip()
+        except Exception as e:
+            raise RuntimeError(f"Transcription failed: {str(e)}") from e
     
     async def transcribe_video(self, video_path: str) -> Optional[str]:
-        """Extract audio from video and transcribe."""
+        """Extract audio from video and transcribe using Whisper AI."""
+        audio_path = None
         try:
             # Extract audio using ffmpeg
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -75,22 +63,21 @@ Doctor: I see. Let's discuss some lifestyle changes and possibly some medication
                 "-vn", "-acodec", "pcm_s16le",
                 "-ar", "16000", "-ac", "1",
                 audio_path, "-y"
-            ], check=True, capture_output=True)
+            ], check=True, capture_output=True, text=True)
             
             # Transcribe the extracted audio
             transcript = await self.transcribe(audio_path)
             
-            # Clean up temp file
-            os.unlink(audio_path)
-            
             return transcript
         except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e}")
-            return self._mock_transcription(video_path)
+            raise RuntimeError(f"FFmpeg audio extraction failed: {e.stderr}") from e
         except Exception as e:
-            print(f"Video transcription error: {e}")
-            return self._mock_transcription(video_path)
-
+            raise RuntimeError(f"Video transcription error: {str(e)}") from e
+        finally:
+            # Clean up temp file
+            if audio_path and os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
     # Real-time transcription methods
     def start_realtime_session(self, appointment_id: str):
         """Start a real-time transcription session."""
@@ -118,52 +105,52 @@ Doctor: I see. Let's discuss some lifestyle changes and possibly some medication
             del self._realtime_transcripts[appointment_id]
         return transcript
     
-    def generate_summary(self, transcript: str, doctor_name: str = "Doctor", patient_name: str = "Patient") -> Dict:
-        """Generate a summary from the transcript."""
-        # In production, this would use an AI model (GPT, Claude, etc.)
-        # For now, generate a structured mock summary
+    def generate_summary(
+        self, 
+        transcript: str, 
+        doctor_name: str = "Doctor",
+        patient_name: str = "Patient"
+    ) -> dict:
+        """
+        Generate a summary and key points from a transcript.
         
-        summary = f"""## Medical Consultation Summary
-
-### Participants
-- **Doctor**: {doctor_name}
-- **Patient**: {patient_name}
-- **Date**: {datetime.utcnow().strftime("%B %d, %Y")}
-
-### Chief Complaint
-Patient presented with complaints of recurring headaches over the past week.
-
-### History of Present Illness
-- Duration: 1 week
-- Location: Right side of head
-- Character: Throbbing pain
-- Timing: Mostly in the afternoon
-- Aggravating factors: Stress, lack of sleep
-
-### Assessment
-Tension-type headache likely related to:
-1. Work-related stress
-2. Sleep deprivation (5-6 hours/night)
-
-### Plan
-1. Lifestyle modifications recommended:
-   - Improve sleep hygiene (aim for 7-8 hours)
-   - Stress management techniques
-2. Discussed medication options if symptoms persist
-3. Follow-up if no improvement in 2 weeks
-
-### Patient Education
-- Explained the connection between stress, sleep, and headaches
-- Discussed importance of regular sleep schedule
-"""
+        Note: In production, this should use an LLM API (OpenAI GPT, Claude, etc.)
+        for medical-grade summarization. This is a basic implementation.
+        """
+        if not transcript or len(transcript.strip()) < 10:
+            raise ValueError("Transcript is too short or empty to generate a summary")
         
-        key_points = [
-            "Patient experiencing recurring headaches for 1 week",
-            "Pain is throbbing, located on right side, occurs in afternoon",
-            "Possible triggers: work stress, insufficient sleep",
-            "Recommended lifestyle changes before medication",
-            "Follow-up scheduled if no improvement"
-        ]
+        # Simple extraction for now (replace with LLM in production)
+        lines = [line.strip() for line in transcript.split('\n') if line.strip()]
+        
+        # Extract key dialogue points
+        key_points = []
+        for line in lines:
+            # Look for medically relevant statements
+            if any(keyword in line.lower() for keyword in 
+                   ['pain', 'symptom', 'feel', 'hurt', 'problem', 'medication', 
+                    'treatment', 'diagnosis', 'concern', 'history']):
+                # Clean up and add
+                clean_line = line.split(':', 1)[-1].strip() if ':' in line else line
+                if clean_line and len(clean_line) > 10:
+                    key_points.append(clean_line)
+        
+        # Limit to top 5 most relevant
+        key_points = key_points[:5]
+        
+        if not key_points:
+            key_points = ["Medical consultation completed", "Full transcript available for review"]
+        
+        # Generate summary
+        word_count = len(transcript.split())
+        line_count = len(lines)
+        
+        summary = (
+            f"Medical consultation between {doctor_name} and {patient_name}. "
+            f"Transcript contains {line_count} dialogue exchanges ({word_count} words). "
+            f"{len(key_points)} key points identified. "
+            "Review full transcript for complete medical details."
+        )
         
         return {
             "summary": summary,

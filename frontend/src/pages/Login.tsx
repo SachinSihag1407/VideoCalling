@@ -11,12 +11,15 @@ import {
   ClipboardCheck,
   UserCog,
   Users,
-  ArrowRight
+  ArrowRight,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'doctor' | 'patient'>('patient');
@@ -239,15 +242,23 @@ const Login: React.FC = () => {
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     id="password"
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full pl-10 pr-12 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     placeholder="••••••••"
                     required
                     aria-invalid={Boolean(error)}
                     aria-describedby={error ? "login-error" : undefined}
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
                 </div>
               </div>
 
@@ -270,35 +281,52 @@ const Login: React.FC = () => {
               </p>
             </div>
 
-            {/* Demo Accounts */}
+            {/* Demo Account - Role Specific */}
             <div className="mt-8 pt-6 border-t border-gray-200">
               <p className="text-sm font-medium text-gray-700 text-center mb-4">🔐 Quick Demo Access</p>
-              <div className="grid grid-cols-2 gap-3">
+              {activeTab === 'doctor' ? (
                 <button
                   type="button"
                   onClick={() => fillDemoCredentials('doctor')}
-                  className="p-3 bg-green-50 hover:bg-green-100 border border-green-200 rounded-xl text-left transition group"
+                  className="w-full p-4 bg-green-50 hover:bg-green-100 border border-green-200 rounded-xl text-left transition group"
                 >
-                  <div className="flex items-center space-x-2 mb-1">
-                    <UserCog className="w-4 h-4 text-green-600" />
-                    <p className="font-semibold text-green-900 text-sm">Doctor Login</p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center space-x-2 mb-2">
+                        <UserCog className="w-5 h-5 text-green-600" />
+                        <p className="font-semibold text-green-900">Doctor Demo Account</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm text-green-800">📧 dr.smith@hospital.com</p>
+                        <p className="text-sm text-green-700">🔑 doctor123</p>
+                      </div>
+                    </div>
+                    <ArrowRight className="w-5 h-5 text-green-600 group-hover:translate-x-1 transition-transform" />
                   </div>
-                  <p className="text-xs text-green-700">dr.smith@hospital.com</p>
-                  <p className="text-xs text-green-600 mt-1 group-hover:underline">Click to fill →</p>
+                  <p className="text-xs text-green-600 mt-2 group-hover:underline">Click to auto-fill credentials</p>
                 </button>
+              ) : (
                 <button
                   type="button"
                   onClick={() => fillDemoCredentials('patient')}
-                  className="p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-left transition group"
+                  className="w-full p-4 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-left transition group"
                 >
-                  <div className="flex items-center space-x-2 mb-1">
-                    <Users className="w-4 h-4 text-blue-600" />
-                    <p className="font-semibold text-blue-900 text-sm">Patient Login</p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center space-x-2 mb-2">
+                        <Users className="w-5 h-5 text-blue-600" />
+                        <p className="font-semibold text-blue-900">Patient Demo Account</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm text-blue-800">📧 patient1@email.com</p>
+                        <p className="text-sm text-blue-700">🔑 patient123</p>
+                      </div>
+                    </div>
+                    <ArrowRight className="w-5 h-5 text-blue-600 group-hover:translate-x-1 transition-transform" />
                   </div>
-                  <p className="text-xs text-blue-700">patient1@email.com</p>
-                  <p className="text-xs text-blue-600 mt-1 group-hover:underline">Click to fill →</p>
+                  <p className="text-xs text-blue-600 mt-2 group-hover:underline">Click to auto-fill credentials</p>
                 </button>
-              </div>
+              )}
             </div>
           </div>
         </div>

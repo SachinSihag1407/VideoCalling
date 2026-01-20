@@ -20,8 +20,15 @@ async def create_consent_request(
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Create a consent request for an appointment (system creates this automatically)."""
-    # Verify appointment exists and user has access
+    """Create a consent request for an appointment (patients only)."""
+    # Only patients can create/grant consent
+    if current_user.role != UserRole.PATIENT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only patients can create consent records"
+        )
+    
+    # Verify appointment exists
     result = await session.execute(
         select(Appointment).where(Appointment.id == consent_data.appointment_id)
     )
@@ -33,10 +40,11 @@ async def create_consent_request(
             detail="Appointment not found"
         )
     
-    if current_user.id not in [appointment.doctor_id, appointment.patient_id]:
+    # Verify patient owns this appointment
+    if current_user.id != appointment.patient_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
+            detail="You can only create consent for your own appointments"
         )
     
     # Check if consent already exists
