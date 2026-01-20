@@ -81,7 +81,9 @@ class TranscriptionService:
     # Real-time transcription methods
     def start_realtime_session(self, appointment_id: str):
         """Start a real-time transcription session."""
-        self._realtime_transcripts[appointment_id] = []
+        # Only initialize if no existing transcript (preserve on restart)
+        if appointment_id not in self._realtime_transcripts:
+            self._realtime_transcripts[appointment_id] = []
     
     def add_realtime_chunk(self, appointment_id: str, text: str, speaker: str = "Unknown"):
         """Add a chunk of transcribed text to the real-time session."""

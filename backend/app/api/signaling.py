@@ -1,5 +1,6 @@
 import json
 from typing import Dict, Set
+from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -182,14 +183,46 @@ async def websocket_signaling(
                     "from_id": user_id
                 }, exclude=websocket)
             
-            elif message_type == "chat":
-                # In-call chat message
-                await manager.broadcast_to_room(room_id, {
-                    "type": "chat",
-                    "message": data.get("message"),
-                    "from_id": user_id,
-                    "from_role": user_role
-                })
+            elif message_type == "chat-message":
+                # In-call chat message - save to database and broadcast
+                try:
+                    from app.models.models import ChatMessage
+                    from app.core import get_session
+                    
+                    # Get session
+                    async for session in get_session():
+                        # Save message to database
+                        chat_msg = ChatMessage(
+                            interview_id=data.get("interview_id"),
+                            sender_id=user_id,
+                            message=data.get("message", "")[:1000]  # Max 1000 chars
+                        )
+                        session.add(chat_msg)
+                        await session.commit()
+                        await session.refresh(chat_msg)
+                        
+                        # Broadcast to room (exclude sender - they'll add it locally)
+                        await manager.broadcast_to_room(room_id, {
+                            "type": "chat-message",
+                            "id": chat_msg.id,
+                            "sender_id": user_id,
+                            "sender_role": user_role,
+                            "message": chat_msg.message,
+                            "created_at": chat_msg.created_at.isoformat()
+                        }, exclude=websocket)
+                        break
+                        
+                except Exception as e:
+                    print(f"Error saving chat message: {e}")
+                    # Even if save fails, still broadcast for real-time UX
+                    await manager.broadcast_to_room(room_id, {
+                        "type": "chat-message",
+                        "sender_id": user_id,
+                        "sender_role": user_role,
+                        "message": data.get("message", ""),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "error": "Message may not be saved"
+                    })
             
             elif message_type == "ping":
                 await websocket.send_json({"type": "pong"})
