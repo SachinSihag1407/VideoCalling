@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { appointmentsAPI, consentAPI, interviewsAPI, notificationsAPI } from '../services/api';
 import { Appointment, Consent, Interview } from '../types';
+import { ChatMessage } from '../types/chat';
+import ChatPanel from '../components/ChatPanel';
 import {
   Video,
   VideoOff,
@@ -67,6 +69,10 @@ const InterviewRoom: React.FC = () => {
   const [currentCaption, setCurrentCaption] = useState<string>('');
   const [showCaptions, setShowCaptions] = useState(true);
   const [showTranscriptPanel, setShowTranscriptPanel] = useState(false);
+
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -160,6 +166,13 @@ const InterviewRoom: React.FC = () => {
       };
     }
   }, [user, appointment, callStatus]);
+
+  // Load chat history when interview is available
+  useEffect(() => {
+    if (interview?.id) {
+      loadChatHistory();
+    }
+  }, [interview?.id]);
 
   const formatDuration = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
@@ -345,6 +358,18 @@ const InterviewRoom: React.FC = () => {
       case 'recording-stopped':
         console.log('⏹️ Recording stopped');
         setIsRecording(false);
+        break;
+
+      case 'chat-message':
+        console.log('💬 Chat message received:', data);
+        setChatMessages(prev => [...prev, {
+          id: data.id || Date.now().toString(),
+          sender_id: data.sender_id,
+          sender_role: data.sender_role,
+          message: data.message,
+          created_at: data.created_at || new Date().toISOString(),
+          error: data.error
+        }]);
         break;
 
       case 'user-left':
@@ -701,6 +726,7 @@ const InterviewRoom: React.FC = () => {
     if (!appointmentId) return;
 
     try {
+      // Backend now preserves existing transcripts on restart
       await interviewsAPI.startRealtime(appointmentId);
       setIsTranscribing(true);
 
@@ -778,83 +804,91 @@ const InterviewRoom: React.FC = () => {
       };
 
       recognition.onerror = (event: any) => {
-        console.warn('Speech recognition error:', event.error);
+        console.warn('🚨 Speech recognition error:', event.error);
 
         // Handle different error types
         switch (event.error) {
           case 'no-speech':
-            // User not speaking - this is normal, don't restart immediately
-            console.log('No speech detected, waiting...');
+            // User not speaking - this is normal, don't stop
+            console.log('⏸️ No speech detected, will auto-restart...');
+            // Don't call stopRealtimeTranscription - let it restart naturally
             break;
 
           case 'audio-capture':
-            console.error('Microphone not available');
+            console.error('❌ Microphone not available');
             setError('Microphone not available. Please check your microphone settings.');
             stopRealtimeTranscription();
             break;
 
           case 'not-allowed':
-            console.error('Microphone permission denied');
+            console.error('❌ Microphone permission denied');
             setError('Microphone permission denied. Please allow microphone access.');
             stopRealtimeTranscription();
             break;
 
           case 'network':
-            // Network error - retry after delay
-            console.log('Network error, will retry...');
-            if (recognitionRestartTimeoutRef.current) {
-              clearTimeout(recognitionRestartTimeoutRef.current);
-            }
-            recognitionRestartTimeoutRef.current = setTimeout(() => {
-              if (isTranscribingRef.current && recognitionRef.current) {
-                try {
-                  recognitionRef.current.start();
-                  console.log('Restarted speech recognition after network error');
-                } catch (e) {
-                  console.error('Failed to restart recognition:', e);
-                }
-              }
-            }, 2000);
+            // Network error - just log and let onend restart
+            console.log('📡 Network error, will restart automatically...');
             break;
 
           case 'aborted':
-            // Recognition was aborted - restart if still transcribing
-            if (isTranscribingRef.current) {
-              setTimeout(() => {
-                if (recognitionRef.current) {
-                  try {
-                    recognitionRef.current.start();
-                  } catch (e) {
-                    console.error('Failed to restart after abort:', e);
-                  }
-                }
-              }, 500);
-            }
+            // Recognition was aborted - let onend handle restart
+            console.log('🛑 Recognition aborted, will restart...');
             break;
 
           default:
-            console.error('Unknown speech recognition error:', event.error);
+            console.warn('⚠️ Unknown error:', event.error, '- will attempt restart');
+          // Don't stop for unknown errors, let onend handle it
         }
       };
 
       recognition.onend = () => {
-        console.log('Speech recognition ended');
-        // Auto-restart if still transcribing
-        if (isTranscribingRef.current && recognitionRef.current) {
-          if (recognitionRestartTimeoutRef.current) {
-            clearTimeout(recognitionRestartTimeoutRef.current);
-          }
-          recognitionRestartTimeoutRef.current = setTimeout(() => {
-            try {
-              if (recognitionRef.current) {
-                recognitionRef.current.start();
-                console.log('Restarted speech recognition');
-              }
-            } catch (e) {
-              console.error('Failed to restart recognition:', e);
-            }
-          }, 500);
+        console.log('🎤 Speech recognition ended');
+
+        // Only restart if still supposed to be transcribing
+        if (!isTranscribingRef.current) {
+          console.log('🛑 Not transcribing anymore, not restarting');
+          return;
         }
+
+        console.log('♻️ Attempting to restart recognition...');
+
+        // Clear any existing restart timeout
+        if (recognitionRestartTimeoutRef.current) {
+          clearTimeout(recognitionRestartTimeoutRef.current);
+          recognitionRestartTimeoutRef.current = null;
+        }
+
+        // Attempt restart with delay
+        recognitionRestartTimeoutRef.current = setTimeout(() => {
+          if (!isTranscribingRef.current || !recognitionRef.current) {
+            console.log('🛑 Conditions changed, canceling restart');
+            return;
+          }
+
+          try {
+            recognitionRef.current.start();
+            console.log('✅ Recognition restarted successfully');
+          } catch (err: any) {
+            // Handle "already started" error gracefully
+            if (err.message && err.message.includes('already started')) {
+              console.log('ℹ️ Recognition already running, no action needed');
+            } else {
+              console.error('❌ Failed to restart recognition:', err);
+              // Try one more time after a longer delay
+              setTimeout(() => {
+                if (isTranscribingRef.current && recognitionRef.current) {
+                  try {
+                    recognitionRef.current.start();
+                    console.log('✅ Recognition restarted on retry');
+                  } catch (retryErr) {
+                    console.error('❌ Retry failed:', retryErr);
+                  }
+                }
+              }, 2000);
+            }
+          }
+        }, 100); // Reduced delay for faster restart
       };
 
       recognition.onstart = () => {
@@ -934,15 +968,22 @@ const InterviewRoom: React.FC = () => {
         }
       }
 
-      // End transcription session on backend
-      await interviewsAPI.endRealtime(appointmentId);
+      // DON'T end the session - just pause recognition
+      // This preserves the transcript for resume/summary generation
+      // await interviewsAPI.endRealtime(appointmentId); // REMOVED
       setIsTranscribing(false);
 
-      // Fetch final transcript
-      const res = await interviewsAPI.getRealtimeTranscript(appointmentId);
-      setRealtimeTranscript(res.data.transcript || '');
+      // Fetch current transcript to ensure UI is in sync
+      try {
+        const res = await interviewsAPI.getRealtimeTranscript(appointmentId);
+        if (res.data.transcript) {
+          setRealtimeTranscript(res.data.transcript);
+        }
+      } catch (err) {
+        console.log('Could not fetch transcript on stop, keeping current state');
+      }
 
-      console.log(' Transcription stopped successfully');
+      console.log('✅ Transcription paused (transcript preserved)');
     } catch (err) {
       console.error('Failed to stop transcription:', err);
       setIsTranscribing(false);
@@ -986,9 +1027,115 @@ const InterviewRoom: React.FC = () => {
     navigator.clipboard.writeText(text);
   };
 
+  // Chat functions
+  const sendChatMessage = (message: string) => {
+    console.log('💬 sendChatMessage called:', {
+      hasWs: !!wsRef.current,
+      wsReadyState: wsRef.current?.readyState,
+      interviewId: interview?.id,
+      message: message.substring(0, 50)
+    });
+
+    if (!wsRef.current) {
+      console.error('❌ WebSocket not initialized');
+      alert('Chat is not connected. Please wait for the call to connect.');
+      return;
+    }
+
+    if (wsRef.current.readyState !== WebSocket.OPEN) {
+      console.error('❌ WebSocket not open. State:', wsRef.current.readyState);
+      alert('Chat connection is not ready. Please try again.');
+      return;
+    }
+
+    if (!interview?.id) {
+      console.error('❌ No interview ID available');
+      alert('Interview session not initialized. Please try again.');
+      return;
+    }
+
+    if (!message.trim()) {
+      console.warn('⚠️ Empty message, not sending');
+      return;
+    }
+
+    const chatPayload = {
+      type: 'chat-message',
+      interview_id: interview.id,
+      message: message.trim()
+    };
+
+    console.log('📤 Sending chat message:', chatPayload);
+
+    try {
+      // Add message to local state immediately (optimistic update)
+      const tempMessage: ChatMessage = {
+        id: Date.now().toString(), // Temporary ID
+        sender_id: user?.id || '',
+        sender_role: user?.role || 'unknown',
+        message: message.trim(),
+        created_at: new Date().toISOString()
+      };
+
+      setChatMessages(prev => [...prev, tempMessage]);
+      console.log('✅ Message added to local state');
+
+      // Send to backend (backend will broadcast to OTHER users, not sender)
+      wsRef.current.send(JSON.stringify(chatPayload));
+      console.log('✅ Chat message sent to backend');
+    } catch (error) {
+      console.error('❌ Failed to send chat message:', error);
+      alert('Failed to send message. Please try again.');
+    }
+  };
+
+  const loadChatHistory = async () => {
+    if (!interview?.id) return;
+
+    try {
+      const response = await interviewsAPI.getMessages(interview.id);
+      if (response.data?.messages) {
+        setChatMessages(response.data.messages);
+      }
+    } catch (error) {
+      console.error('Failed to load chat history:', error);
+    }
+  };
+
+  const handleSummarize = async () => {
+    if (!interview?.id) return;
+
+    setIsGeneratingSummary(true);
+    try {
+      const response = await interviewsAPI.summarize(interview.id);
+      const data = response.data;
+
+      setSummary({
+        summary: data.summary,
+        key_points: JSON.parse(data.key_points || '[]')
+      });
+      setShowSummaryPanel(true);
+    } catch (error: any) {
+      alert(error.response?.data?.detail || 'Failed to generate summary. Please try again.');
+      console.error('Summarization error:', error);
+    } finally {
+      setIsGeneratingSummary(false);
+    }
+  };
+
   const endCall = async () => {
     if (isRecording) await stopRecording();
     if (isTranscribing) await stopRealtimeTranscription();
+
+    // Finalize transcript when call actually ends
+    if (appointmentId) {
+      try {
+        await interviewsAPI.endRealtime(appointmentId);
+        console.log('✅ Transcript finalized and saved to interview');
+      } catch (err) {
+        console.log('Could not finalize transcript:', err);
+      }
+    }
 
     cleanup();
 
@@ -1263,8 +1410,8 @@ const InterviewRoom: React.FC = () => {
               <button
                 onClick={toggleAudio}
                 className={`p-4 rounded-2xl transition-all ${isAudioOn
-                    ? 'bg-slate-700 hover:bg-slate-600 text-white'
-                    : 'bg-red-500 hover:bg-red-600 text-white'
+                  ? 'bg-slate-700 hover:bg-slate-600 text-white'
+                  : 'bg-red-500 hover:bg-red-600 text-white'
                   }`}
                 title={isAudioOn ? 'Mute' : 'Unmute'}
               >
@@ -1274,8 +1421,8 @@ const InterviewRoom: React.FC = () => {
               <button
                 onClick={toggleVideo}
                 className={`p-4 rounded-2xl transition-all ${isVideoOn
-                    ? 'bg-slate-700 hover:bg-slate-600 text-white'
-                    : 'bg-red-500 hover:bg-red-600 text-white'
+                  ? 'bg-slate-700 hover:bg-slate-600 text-white'
+                  : 'bg-red-500 hover:bg-red-600 text-white'
                   }`}
                 title={isVideoOn ? 'Turn off camera' : 'Turn on camera'}
               >
@@ -1321,8 +1468,8 @@ const InterviewRoom: React.FC = () => {
                 <button
                   onClick={isTranscribing ? stopRealtimeTranscription : startRealtimeTranscription}
                   className={`px-5 py-4 rounded-2xl flex items-center space-x-2 transition-all ${isTranscribing
-                      ? 'bg-purple-500 hover:bg-purple-600'
-                      : 'bg-slate-700 hover:bg-slate-600'
+                    ? 'bg-purple-500 hover:bg-purple-600'
+                    : 'bg-slate-700 hover:bg-slate-600'
                     } text-white`}
                   title={isTranscribing ? 'Stop transcription' : 'Start transcription'}
                 >
@@ -1355,15 +1502,16 @@ const InterviewRoom: React.FC = () => {
                 </button>
               )}
 
-              {/* Summary - Doctor only */}
-              {user?.role === 'doctor' && realtimeTranscript && (
+              {/* Summary - Available to both doctor and patient */}
+              {realtimeTranscript && (
                 <button
-                  onClick={generateSummary}
+                  onClick={handleSummarize}
                   disabled={isGeneratingSummary}
                   className={`px-5 py-4 rounded-2xl flex items-center space-x-2 transition-all ${isGeneratingSummary
-                      ? 'bg-slate-600 cursor-wait'
-                      : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600'
+                    ? 'bg-slate-600 cursor-wait'
+                    : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600'
                     } text-white`}
+                  title="Generate AI summary from transcript"
                 >
                   {isGeneratingSummary ? (
                     <RefreshCw className="w-5 h-5 animate-spin" />
@@ -1498,6 +1646,15 @@ const InterviewRoom: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Chat Panel */}
+      <ChatPanel
+        messages={chatMessages}
+        currentUserId={user?.id || ''}
+        onSendMessage={sendChatMessage}
+        isOpen={isChatOpen}
+        onToggle={() => setIsChatOpen(!isChatOpen)}
+      />
     </div>
   );
 };

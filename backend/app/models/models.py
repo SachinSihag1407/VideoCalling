@@ -227,10 +227,12 @@ class Interview(InterviewBase, table=True):
     duration_seconds: Optional[int] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    summarized_at: Optional[datetime] = None  # When summary was generated
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     # Relationships
     appointment: Optional[Appointment] = Relationship(back_populates="interview")
+    chat_messages: list["ChatMessage"] = Relationship(back_populates="interview")
 
 
 class InterviewCreate(SQLModel):
@@ -324,3 +326,32 @@ class Token(SQLModel):
 class TokenData(SQLModel):
     user_id: Optional[str] = None
     role: Optional[UserRole] = None
+
+
+# Chat Message Models
+class ChatMessage(SQLModel, table=True):
+    __tablename__ = "chat_messages"
+    
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
+    interview_id: str = Field(foreign_key="interviews.id", index=True)
+    sender_id: str = Field(foreign_key="users.id")
+    message: str = Field(max_length=1000)  # Max 1000 chars
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Relationships
+    interview: Optional[Interview] = Relationship(back_populates="chat_messages")
+    sender: Optional[User] = Relationship()
+
+
+class ChatMessageCreate(SQLModel):
+    interview_id: str
+    message: str
+
+
+class ChatMessageRead(SQLModel):
+    id: str
+    interview_id: str
+    sender_id: str
+    message: str
+    created_at: datetime
+

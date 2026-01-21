@@ -587,6 +587,132 @@ async def get_interview_summary(
     }
 
 
+
+
+@router.post("/{interview_id}/summarize")
+async def summarize_interview(
+    interview_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Generate AI summary from interview transcript."""
+    from app.services.summarization import get_summarization_service
+    
+    # Get interview
+    result = await session.execute(
+        select(Interview).where(Interview.id == interview_id)
+    )
+    interview = result.scalar_one_or_none()
+    
+    if not interview:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Interview not found"
+        )
+    
+    # Verify user has access (doctor or patient from the appointment)
+    appt_result = await session.execute(
+        select(Appointment).where(Appointment.id == interview.appointment_id)
+    )
+    appointment = appt_result.scalar_one_or_none()
+    
+    if not appointment or (current_user.id != appointment.patient_id and current_user.id != appointment.doctor_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this interview"
+        )
+    
+    # Check if transcript exists (from real-time transcription)
+    transcript_text = interview.transcript_text
+    if not transcript_text or len(transcript_text.strip()) < 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No transcript available or transcript too short. Please transcribe the interview first using real-time captions."
+        )
+    
+    # Generate summary using AI
+    try:
+        summarization_service = get_summarization_service()
+        result = await summarization_service.generate_summary(transcript_text)
+        
+        # Update interview with summary
+        interview.summary_text = result["summary"]
+        interview.key_points = result["key_points"]
+        interview.summarized_at = datetime.utcnow()
+        
+        await session.commit()
+        await session.refresh(interview)
+        
+        return {
+            "interview_id": interview.id,
+            "summary": interview.summary_text,
+            "key_points": interview.key_points,
+            "summarized_at": interview.summarized_at.isoformat() if interview.summarized_at else None
+        }
+        
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate summary: {str(e)}"
+        )
+
+
+@router.get("/{interview_id}/messages")
+async def get_interview_messages(
+    interview_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get chat messages for an interview."""
+    from app.models.models import ChatMessage
+    
+    # Verify interview exists and user has access
+    result = await session.execute(
+        select(Interview).where(Interview.id == interview_id)
+    )
+    interview = result.scalar_one_or_none()
+    
+    if not interview:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Interview not found"
+        )
+    
+    # Verify access
+    appt_result = await session.execute(
+        select(Appointment).where(Appointment.id == interview.appointment_id)
+    )
+    appointment = appt_result.scalar_one_or_none()
+    
+    if not appointment or (current_user.id != appointment.patient_id and current_user.id != appointment.doctor_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access these messages"
+        )
+    
+    # Get messages
+    # Get messages with sender information
+    messages_result = await session.execute(
+        select(ChatMessage, User)
+        .join(User, ChatMessage.sender_id == User.id)
+        .where(ChatMessage.interview_id == interview_id)
+        .order_by(ChatMessage.created_at)
+    )
+    messages_with_users = messages_result.all()
+    
+    return {"messages": [
+        {
+            "id": msg.id,
+            "sender_id": msg.sender_id,
+            "sender_role": user.role.value if user.role else "unknown",
+            "message": msg.message,
+            "created_at": msg.created_at.isoformat()
+        }
+        for msg, user in messages_with_users
+    ]}
+
+
 def _interview_to_read(interview: Interview) -> InterviewRead:
     return InterviewRead(
         id=interview.id,
@@ -601,3 +727,4 @@ def _interview_to_read(interview: Interview) -> InterviewRead:
         ended_at=interview.ended_at,
         created_at=interview.created_at
     )
+

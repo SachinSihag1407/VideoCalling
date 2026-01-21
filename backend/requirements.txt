@@ -22,3 +22,6 @@ aioboto3==12.3.0
 
 # AI/ML for production transcription
 openai-whisper
+
+# Google Gemini for summarization
+google-generativeai==0.3.2
